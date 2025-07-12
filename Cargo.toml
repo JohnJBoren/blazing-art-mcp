@@ -1,0 +1,61 @@
+[package]
+name = "blazing-art-mcp"
+version = "0.1.0"
+edition = "2021"
+authors = ["John Boren <john@example.com>"]
+description = "⚡ Blazing-fast Adaptive Radix Tree (ART) powered MCP server delivering microsecond-latency structured memory for LLMs"
+license = "MIT"
+repository = "https://github.com/JohnJBoren/blazing-art-mcp"
+keywords = ["mcp", "art", "memory", "llm", "server"]
+categories = ["data-structures", "web-programming"]
+
+[dependencies]
+# Core MCP and ART
+art-tree = "0.4"
+rmcp = { version = "0.2", features = ["server"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+
+# Performance optimizations
+mimalloc = "0.1"                    # 2-6x performance boost
+rkyv = { version = "0.7", features = ["validation"] }  # Zero-copy serialization
+parking_lot = "0.12"                # Faster mutexes
+ahash = "0.8"                       # Faster hashing
+
+# Production features
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+opentelemetry = "0.20"
+opentelemetry-otlp = "0.13"
+tracing-opentelemetry = "0.21"
+axum = "0.7"                        # For health checks
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Security
+secrecy = "0.8"
+uuid = { version = "1.0", features = ["v4"] }
+
+[profile.release]
+# Aggressive optimizations
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Target-specific optimizations for musl
+[target."cfg(target_env = \"musl\")".dependencies]
+tikv-jemallocator = "0.6"
+
+# Development dependencies
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio-test = "0.4"
+
+[[bench]]
+name = "art_benchmarks"
+harness = false

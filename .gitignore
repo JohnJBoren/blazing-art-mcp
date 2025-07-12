@@ -1,0 +1,47 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Security
+*.pem
+*.key
+*.crt
+
+# Build artifacts
+*.tar.gz
+*.zip
+
+# Coverage reports
+tarpaulin-report.html
+cobertura.xml
+
+# Benchmarks
+criterion/
+
+# Local data
+*.json
+!examples/*.json
+
+# Docker
+.dockerignore
+
+# Kubernetes secrets
+k8s/secrets/

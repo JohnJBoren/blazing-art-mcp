@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Albert Einstein",
+    "summary": "Theoretical physicist who developed the theory of relativity, one of the two pillars of modern physics. Winner of the Nobel Prize in Physics in 1921.",
+    "born": "1879",
+    "tags": ["physicist", "relativity", "nobel-prize", "princeton"]
+  },
+  {
+    "name": "Claude Shannon",
+    "summary": "American mathematician, electrical engineer, and cryptographer known as the father of information theory and digital circuits.",
+    "born": "1916",
+    "tags": ["mathematician", "information-theory", "bell-labs", "cryptography"]
+  },
+  {
+    "name": "Ada Lovelace",
+    "summary": "English mathematician and writer, chiefly known for her work on Charles Babbage's proposed mechanical general-purpose computer, the Analytical Engine.",
+    "born": "1815",
+    "tags": ["mathematician", "programmer", "analytical-engine", "pioneer"]
+  },
+  {
+    "name": "Alan Turing",
+    "summary": "English mathematician, computer scientist, logician, cryptanalyst, philosopher, and theoretical biologist. Turing was highly influential in the development of theoretical computer science.",
+    "born": "1912",
+    "tags": ["computer-scientist", "cryptanalyst", "turing-machine", "ai-pioneer"]
+  },
+  {
+    "name": "Marie Curie",
+    "summary": "Polish and naturalized-French physicist and chemist who conducted pioneering research on radioactivity. First woman to win a Nobel Prize and the only person to win Nobel Prizes in two different sciences.",
+    "born": "1867",
+    "tags": ["physicist", "chemist", "radioactivity", "nobel-prize", "pioneer"]
+  }
+]
