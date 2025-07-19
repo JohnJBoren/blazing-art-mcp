@@ -101,7 +101,7 @@ test-load: ## Run load tests (requires wrk)
 	@sleep 3
 	@echo "Running load tests..."
 	@wrk -t12 -c400 -d30s http://localhost:4000/ || echo "Install wrk for load testing"
-	@pkill -f mcp_memory_server
+   @pkill -f blazing_art_mcp
 
 # Health Checks
 health-check: ## Run health check

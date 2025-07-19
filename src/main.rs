@@ -12,13 +12,13 @@
 //! # Usage
 //! ```bash
 //! # STDIO transport (default)
-//! ./mcp_memory_server --entities entities.json --events events.json
+//! ./blazing_art_mcp --entities entities.json --events events.json
 //! 
 //! # WebSocket transport
-//! ./mcp_memory_server --ws 0.0.0.0:4000 --entities entities.json
+//! ./blazing_art_mcp --ws 0.0.0.0:4000 --entities entities.json
 //! 
 //! # With telemetry and custom limits
-//! ./mcp_memory_server --telemetry --event-limit 1000 --health-port 3000
+//! ./blazing_art_mcp --telemetry --event-limit 1000 --health-port 3000
 //! ```
 
 use std::{fs, path::PathBuf, sync::Arc};
@@ -56,7 +56,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 /// Command-line interface with production options
 #[derive(Parser, Debug)]
 #[command(
-    name = "mcp_memory_server",
+    name = "blazing_art_mcp",
     about = "High-performance ART-backed MCP memory server for LLMs",
     long_about = "A production-ready memory server that provides microsecond-latency access to structured data for Large Language Models via the Model Context Protocol (MCP)."
 )]
@@ -499,4 +499,33 @@ struct LookupArgs {
 #[derive(Deserialize)]
 struct PrefixArgs {
     prefix: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn memory_from_examples() -> Memory {
+        let mem = Memory::new(10);
+        mem.load_entities(&PathBuf::from("examples/entities.json")).unwrap();
+        mem.load_events(&PathBuf::from("examples/events.json")).unwrap();
+        mem
+    }
+
+    #[test]
+    fn lookup_entity_returns_record() {
+        let mem = memory_from_examples();
+        let einstein = mem.lookup_entity("Albert Einstein").unwrap();
+        assert!(einstein.summary.to_lowercase().contains("relativity"));
+    }
+
+    #[test]
+    fn find_events_prefix_filters() {
+        let mem = memory_from_examples();
+        let events = mem.find_events("2024-01-1");
+        assert!(!events.is_empty());
+        for ev in &events {
+            assert!(ev.id.starts_with("2024-01-1"));
+        }
+    }
 }

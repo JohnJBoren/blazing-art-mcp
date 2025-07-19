@@ -7,10 +7,12 @@
 
 ⚡ **Blazing-fast Adaptive Radix Tree (ART) powered MCP server** delivering **microsecond-latency** structured memory access for Large Language Models. Built with Rust for **zero V8 overhead** and **predictable performance**.
 
+This server implements the [Model Context Protocol](https://github.com/modelcontextprotocol) so any MCP-compatible LLM can query structured memory over JSON-RPC.
+
 ## 🚀 Performance Characteristics
 
 | Dataset Size | Lookup P95 | Prefix Scan (100 matches) | Memory Usage |
-|-------------|------------|---------------------------|--------------||
+|-------------|------------|---------------------------|--------------|
 | 100k keys  | **8 µs**   | **35 µs**                | **12 MB**    |
 | 1M keys    | **11 µs**  | **60 µs**                | **85 MB**    |
 
@@ -39,6 +41,18 @@
 - **🔌 Model Context Protocol**: Standardized LLM integration via JSON-RPC 2.0
 - **🐳 Docker**: Static-linked, distroless containers (<10MB)
 - **☸️ Kubernetes**: Production-ready with autoscaling, monitoring, security
+
+## 🛠 Prerequisites
+
+Install **Rust 1.76+** using [rustup](https://rustup.rs/) if you don't already
+have the toolchain:
+
+```bash
+curl https://sh.rustup.rs -sSf | sh -s -- -y
+source $HOME/.cargo/env
+```
+
+Then you can build and test the project with `cargo build` and `cargo test`.
 
 ## 🎯 Quick Start
 
@@ -95,7 +109,7 @@ curl http://localhost:3000/health/ready
 ### Command Line Options
 
 ```bash
-mcp_memory_server [OPTIONS]
+blazing_art_mcp [OPTIONS]
 
 Options:
   --entities <FILE>      JSON file with entity data to preload
@@ -308,7 +322,7 @@ docker run --rm mcp-memory:scan cat /tmp/trivy-report.sarif
 **Container fails health check:**
 ```bash
 # Check health endpoint directly
-docker exec -it <container> /mcp_memory_server --health-check
+docker exec -it <container> /blazing_art_mcp --health-check
 
 # Verify port binding
 docker ps | grep mcp-memory
@@ -325,7 +339,7 @@ curl http://localhost:3000/metrics
 **Performance degradation:**
 ```bash
 # Enable debug logging
-RUST_LOG=debug ./mcp_memory_server
+RUST_LOG=debug ./blazing_art_mcp
 
 # Check for JSON serialization bottlenecks in traces
 ```
