@@ -28,13 +28,13 @@ services:
     environment:
       - RUST_LOG=info
     command: [
-      "/mcp_memory_server",
+      "/blazing_art_mcp",
       "--ws", "0.0.0.0:4000",
       "--health-port", "3000",
       "--telemetry"
     ]
     healthcheck:
-      test: ["/mcp_memory_server", "--health-check"]
+      test: ["/blazing_art_mcp", "--health-check"]
       interval: 30s
       timeout: 3s
       retries: 3

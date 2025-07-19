@@ -40,7 +40,7 @@ RUN cargo build \
 
 # ---------- security scanning stage ----------
 FROM aquasec/trivy:latest AS security-scan
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/mcp_memory_server /tmp/
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/blazing_art_mcp /tmp/
 RUN trivy fs --security-checks vuln --format sarif --output /tmp/trivy-report.sarif /tmp/
 
 # ---------- runtime stage ----------
@@ -48,8 +48,8 @@ FROM gcr.io/distroless/static:nonroot
 
 # Copy binary with correct permissions
 COPY --from=builder --chown=nonroot:nonroot \
-    /app/target/x86_64-unknown-linux-musl/release/mcp_memory_server \
-    /mcp_memory_server
+    /app/target/x86_64-unknown-linux-musl/release/blazing_art_mcp \
+    /blazing_art_mcp
 
 # Security labels
 LABEL \
@@ -65,10 +65,10 @@ USER nonroot:nonroot
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["/mcp_memory_server", "--health-check"]
+    CMD ["/blazing_art_mcp", "--health-check"]
 
 # Default to STDIO transport
-ENTRYPOINT ["/mcp_memory_server"]
+ENTRYPOINT ["/blazing_art_mcp"]
 
 # ---------- Development variant ----------
 FROM builder AS development
