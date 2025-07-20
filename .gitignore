@@ -39,6 +39,7 @@ criterion/
 # Local data
 *.json
 !examples/*.json
+!data/*.json
 
 # Docker
 .dockerignore
