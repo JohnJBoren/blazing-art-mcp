@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>blazing-art-mcp · ART symbol explorer</title>
+  <style>
+    :root {
+      --bg: #0e1116;
+      --panel: #161b22;
+      --border: #30363d;
+      --fg: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --warn: #f85149;
+      --ok: #3fb950;
+      --kbd-bg: #21262d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 24px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: var(--bg); color: var(--fg);
+      line-height: 1.5;
+    }
+    header { margin-bottom: 24px; }
+    h1 { margin: 0 0 4px 0; font-size: 20px; }
+    h1 .badge { font-size: 11px; background: var(--accent); color: #0e1116;
+      padding: 2px 6px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
+    p.lede { color: var(--muted); margin: 0 0 8px 0; font-size: 13px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .panel h2 { margin: 0 0 12px 0; font-size: 14px; color: var(--accent); }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; }
+    input[type=text] {
+      flex: 1; min-width: 0;
+      background: #0d1117; color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-family: inherit; font-size: 13px;
+    }
+    input[type=text]:focus { outline: none; border-color: var(--accent); }
+    button {
+      background: var(--accent); color: #0e1116;
+      border: none; border-radius: 4px;
+      padding: 8px 14px;
+      font-family: inherit; font-size: 13px; font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.1); }
+    button:disabled { background: #30363d; color: var(--muted); cursor: not-allowed; }
+    button.secondary { background: var(--panel); color: var(--fg); border: 1px solid var(--border); font-weight: 400; }
+    .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    kbd { background: var(--kbd-bg); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; font-size: 12px; }
+    .stat { background: #0d1117; border: 1px solid var(--border); border-radius: 4px; padding: 8px; }
+    .stat-label { color: var(--muted); }
+    .stat-value { font-size: 18px; font-weight: 600; margin-top: 2px; }
+    .results {
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px;
+      max-height: 480px;
+      overflow: auto;
+      font-size: 12px;
+    }
+    .results .empty { color: var(--muted); padding: 24px; text-align: center; }
+    .sym-row {
+      display: grid;
+      grid-template-columns: 60px 110px 1fr 2fr;
+      gap: 8px;
+      padding: 4px 6px;
+      border-bottom: 1px solid #161b22;
+    }
+    .sym-row:hover { background: #161b22; }
+    .sym-loc { color: var(--muted); }
+    .sym-kind { color: var(--accent); }
+    .sym-name { font-weight: 600; }
+    .sym-path { color: var(--muted); }
+    .quick {
+      display: flex; gap: 6px; flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .quick button {
+      background: var(--panel); border: 1px solid var(--border);
+      color: var(--fg); font-weight: 400; padding: 4px 10px; font-size: 11px;
+    }
+    .quick button:hover { border-color: var(--accent); }
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    code { background: #0d1117; padding: 1px 4px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>blazing-art-mcp <span class="badge">ART · live</span></h1>
+  <p class="lede">
+    Adaptive Radix Tree backing tree-sitter AST symbols. Microsecond-latency prefix
+    scans over an in-memory symbol index. The same MCP server you connect from Claude
+    Code is reachable from this page over HTTP+SSE — watch the network tab.
+  </p>
+</header>
+
+<div class="panel">
+  <h2>1. Ingest a repo</h2>
+  <div class="row">
+    <input id="ingest-path" type="text"
+      placeholder="absolute path, e.g. /Users/jboren/code/adaptive-radix-tree/blazing-art-mcp/src">
+    <input id="ingest-id" type="text" placeholder="repo_id (optional, defaults to dir name)" style="max-width: 220px;">
+    <button id="ingest-btn">Ingest</button>
+  </div>
+  <div class="hint">
+    Walks <code>.rs</code>, <code>.py</code>, <code>.ts</code>, <code>.tsx</code> files,
+    parses each into an AST, and indexes every declaration (function, struct, class, trait,
+    type) into the ART under both primary and inverted keys.
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="stat-label">files parsed</div><div class="stat-value" id="stat-files">—</div></div>
+    <div class="stat"><div class="stat-label">symbols indexed</div><div class="stat-value" id="stat-syms">—</div></div>
+    <div class="stat"><div class="stat-label">errors</div><div class="stat-value" id="stat-errs">—</div></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>2. Find symbols by prefix</h2>
+  <div class="row">
+    <input id="prefix-input" type="text"
+      placeholder="prefix to scan (use  as the SOH segment separator)">
+    <button id="search-btn">Find</button>
+  </div>
+  <div class="quick">
+    <button data-prefix="pri{SOH}{repo}{SOH}">All symbols in repo</button>
+    <button data-prefix="pri{SOH}{repo}{SOH}memory.rs{SOH}">memory.rs only</button>
+    <button data-prefix="pri{SOH}{repo}{SOH}ingest.rs{SOH}">ingest.rs only</button>
+    <button data-prefix="sym{SOH}function_item{SOH}new{SOH}">All <code>fn new</code> across repos</button>
+    <button data-prefix="sym{SOH}struct_item{SOH}Memory{SOH}">All <code>struct Memory</code></button>
+  </div>
+  <div class="hint" style="margin-top:8px;">
+    The quick-prefixes use the locked schema:
+    <code>pri&lt;repo&gt;&lt;path&gt;</code> for "everything in this file"
+    or <code>sym&lt;kind&gt;&lt;name&gt;</code> for cross-repo
+    "all <code>kind name</code>" lookup.
+  </div>
+  <div class="stats" style="grid-template-columns: 1fr 1fr;">
+    <div class="stat"><div class="stat-label">hits</div><div class="stat-value" id="stat-hits">—</div></div>
+    <div class="stat"><div class="stat-label">latency (ms)</div><div class="stat-value" id="stat-latency">—</div></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>3. Results</h2>
+  <div id="results" class="results">
+    <div class="empty">Run ingest, then a prefix scan.</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Status</h2>
+  <div id="status" class="hint">idle</div>
+  <div class="row" style="margin-top:8px;">
+    <button class="secondary" id="health-btn">GET /health</button>
+    <button class="secondary" id="delete-btn">deleteRepo (current id)</button>
+  </div>
+</div>
+
+<script>
+  const SOH = "";
+  const ENDPOINT = "/mcp";
+
+  const $ = (id) => document.getElementById(id);
+  const status = (msg, cls = "") => { const el = $("status"); el.textContent = msg; el.className = "hint " + cls; };
+
+  let nextId = 1;
+  async function rpc(method, params) {
+    const body = { jsonrpc: "2.0", id: nextId++, method, params };
+    const t0 = performance.now();
+    const r = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+      },
+      body: JSON.stringify(body),
+    });
+    const elapsed = performance.now() - t0;
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const json = await r.json();
+    if (json.error) throw new Error(json.error.message || "rpc error");
+    return { result: json.result, ms: elapsed };
+  }
+
+  async function callTool(name, args) {
+    const { result, ms } = await rpc("tools/call", { name, arguments: args });
+    // Tool results are wrapped: { content: [{ text: "<stringified-json>" }] }
+    const text = result?.content?.[0]?.text ?? "{}";
+    return { data: JSON.parse(text), ms };
+  }
+
+  // Track the most recent repo_id so quick-prefix buttons can templatize.
+  let lastRepoId = "";
+
+  $("ingest-btn").onclick = async () => {
+    const path = $("ingest-path").value.trim();
+    if (!path) return status("enter a path first", "warn");
+    const repo_id = $("ingest-id").value.trim() || undefined;
+    status("ingesting...");
+    $("ingest-btn").disabled = true;
+    try {
+      const { data, ms } = await callTool("ingestRepo", { path, ...(repo_id ? { repo_id } : {}) });
+      $("stat-files").textContent = data.files_parsed ?? "—";
+      $("stat-syms").textContent = data.symbols_indexed ?? "—";
+      $("stat-errs").textContent = (data.errors?.length ?? 0).toString();
+      lastRepoId = repo_id || (path.split("/").filter(Boolean).pop() || "repo");
+      $("ingest-id").value = lastRepoId;
+      status(`ingested ${data.files_parsed} files, ${data.symbols_indexed} symbols in ${ms.toFixed(0)} ms`, "ok");
+    } catch (e) {
+      status("ingest failed: " + e.message, "warn");
+    } finally {
+      $("ingest-btn").disabled = false;
+    }
+  };
+
+  async function search(prefix) {
+    if (!prefix) return status("enter a prefix", "warn");
+    status("searching...");
+    try {
+      const { data, ms } = await callTool("findSymbols", { prefix, limit: 200 });
+      $("stat-hits").textContent = data.length;
+      $("stat-latency").textContent = ms.toFixed(1);
+      const box = $("results");
+      if (!Array.isArray(data) || data.length === 0) {
+        box.innerHTML = `<div class="empty">no hits for prefix <code>${escape(prefix)}</code></div>`;
+      } else {
+        box.innerHTML = data.map((s) => `
+          <div class="sym-row">
+            <span class="sym-loc">${s.line}:${s.col}</span>
+            <span class="sym-kind">${escape(s.kind)}</span>
+            <span class="sym-name">${escape(s.name)}</span>
+            <span class="sym-path">${escape(s.repo)}/${escape(s.path)}</span>
+          </div>
+        `).join("");
+      }
+      status(`${data.length} hits, ${ms.toFixed(1)} ms`, "ok");
+    } catch (e) {
+      status("search failed: " + e.message, "warn");
+    }
+  }
+
+  $("search-btn").onclick = () => search($("prefix-input").value);
+  $("prefix-input").addEventListener("keydown", (e) => { if (e.key === "Enter") search($("prefix-input").value); });
+
+  document.querySelectorAll(".quick button[data-prefix]").forEach((b) => {
+    b.onclick = () => {
+      const repo = lastRepoId || "blazing-art";
+      const p = b.dataset.prefix.replaceAll("{SOH}", SOH).replaceAll("{repo}", repo);
+      $("prefix-input").value = p;
+      search(p);
+    };
+  });
+
+  $("health-btn").onclick = async () => {
+    try {
+      const r = await fetch("/health");
+      const j = await r.json();
+      status("health: " + JSON.stringify(j), j.status === "ok" ? "ok" : "warn");
+    } catch (e) {
+      status("health failed: " + e.message, "warn");
+    }
+  };
+
+  $("delete-btn").onclick = async () => {
+    if (!lastRepoId) return status("no repo ingested yet", "warn");
+    try {
+      const { data } = await callTool("deleteRepo", { repo_id: lastRepoId });
+      status(`removed ${data.removed} entries for repo "${lastRepoId}"`, "ok");
+      $("stat-files").textContent = "—";
+      $("stat-syms").textContent = "—";
+      $("stat-errs").textContent = "—";
+      $("results").innerHTML = `<div class="empty">repo deleted</div>`;
+    } catch (e) {
+      status("delete failed: " + e.message, "warn");
+    }
+  };
+
+  function escape(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+</script>
+
+</body>
+</html>

@@ -9,9 +9,13 @@ repository = "https://github.com/JohnJBoren/blazing-art-mcp"
 keywords = ["mcp", "memory", "llm", "server"]
 categories = ["data-structures", "web-programming"]
 
+[lib]
+name = "blazing_art_mcp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "blazing_art_mcp"
-path = "src/simple_mcp.rs"
+path = "src/main.rs"
 
 [dependencies]
 # Core dependencies
@@ -24,6 +28,21 @@ anyhow = "1.0"
 # Performance optimizations
 mimalloc = "0.1"                    # 2-6x performance boost
 parking_lot = "0.12"                # Faster mutexes
+
+# Adaptive Radix Tree — the actual ART backend (replaces BTreeMap)
+blart = "0.5"
+
+# HTTP/SSE transport (Phase 3)
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+
+# Tree-sitter AST ingestion (Phase 4) — Rust + Python + TypeScript/TSX
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23"
+walkdir = "2.5"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
@@ -43,7 +62,12 @@ tikv-jemallocator = "0.6"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tokio-test = "0.4"
+libc = "0.2"   # for getrusage in the memory_rss bench (Phase 6.2)
 
-# [[bench]]
-# name = "art_benchmarks"
-# harness = false
+[[bench]]
+name = "art_benchmarks"
+harness = false
+
+[[bench]]
+name = "memory_rss"
+harness = false

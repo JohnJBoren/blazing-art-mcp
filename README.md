@@ -1,368 +1,268 @@
-# Blazing ART MCP Server
+# blazing-art-mcp
 
-[![Rust](https://img.shields.io/badge/rust-1.76+-orange.svg)](https://www.rust-lang.org)
-[![MCP](https://img.shields.io/badge/MCP-v0.2-blue.svg)](https://modelcontextprotocol.io)
-[![Docker](https://img.shields.io/badge/docker-ready-green.svg)](https://www.docker.com)
-[![Kubernetes](https://img.shields.io/badge/kubernetes-ready-blue.svg)](https://kubernetes.io)
+> An Adaptive Radix Tree (Leis et al. 2013) wired up as a Model Context Protocol
+> server. Indexes tree-sitter ASTs of any codebase into microsecond-latency,
+> prefix-scannable structured memory for coding agents.
 
-⚡ **Blazing-fast Adaptive Radix Tree (ART) powered MCP server** delivering **microsecond-latency** structured memory access for Large Language Models. Built with Rust for **zero V8 overhead** and **predictable performance**.
+The mission: make ART a defensible primitive for agentic memory by making it
+*real* and *measurably better than the alternatives* on the workload coding
+agents actually run — prefix scans over symbol-shaped keys.
 
-This server implements the [Model Context Protocol](https://github.com/modelcontextprotocol) so any MCP-compatible LLM can query structured memory over JSON-RPC.
+## What's actually here
 
-## 🚀 Performance Characteristics
+| Component | Where |
+|---|---|
+| Real ART backend (`blart::TreeMap`) | `src/memory.rs` |
+| JSON-RPC dispatch | `src/protocol.rs` |
+| Stdio MCP transport | `src/transport/stdio.rs` |
+| HTTP+SSE MCP transport (axum, spec 2025-06-18) | `src/transport/http.rs` |
+| Tree-sitter AST ingestion (Rust, Python, TypeScript, TSX) | `src/ingest.rs` |
+| Criterion benchmarks (point/prefix/insert + scaling sweep + real-data) | `benches/art_benchmarks.rs` |
+| Per-backend isolated RSS measurement (macOS-only) | `benches/memory_rss.rs` |
+| Shared synthetic key generator | `benches/shared/keygen.rs` |
+| Integration tests against a 3-file fixture | `tests/ingest_e2e.rs` |
+| Headline numbers + methodology | `BENCHMARKS.md` |
+| Vanilla-JS web demo | `static/index.html` |
 
-| Dataset Size | Lookup P95 | Prefix Scan (100 matches) | Memory Usage |
-|-------------|------------|---------------------------|--------------|
-| 100k keys  | **8 µs**   | **35 µs**                | **12 MB**    |
-| 1M keys    | **11 µs**  | **60 µs**                | **85 MB**    |
+## Tools exposed
 
-> **Note**: Performance numbers dominated by JSON serialization, not ART traversal - demonstrating exceptional core efficiency.
+| Tool | What it does |
+|---|---|
+| `lookupEntity(name)` | Exact-match entity fetch from in-memory store. |
+| `addEntity(name, summary, born?, tags)` | Insert/update an entity. |
+| `findEvents(prefix)` | ART prefix scan over event ids (capped by `--event-limit`). |
+| `addEvent(id?, timestamp?, description, category)` | Insert/update an event. |
+| `ingestRepo(path, repo_id?)` | Walk a repo, parse `.rs/.py/.ts/.tsx` with tree-sitter, index every declaration symbol under both a primary and an inverted ART key. |
+| `findSymbols(prefix, limit?)` | ART prefix scan over the symbol index. See key schema below. |
+| `deleteRepo(repo_id)` | Remove every symbol entry for a repo. |
 
-## 🏗️ Architecture
+## Key schema (locked — don't change without re-checking `blart::NoPrefixesBytes`)
+
+The segment separator inside composite keys is **`\x01` (SOH)**, *not* `\x00`,
+because `blart::TreeMap::insert` requires `NoPrefixesBytes`, which `String`
+doesn't satisfy. We use `CString::new(<bytes-with-internal-SOH-but-no-NUL>)`,
+which appends the trailing `\x00` that makes any inserted key prefix-free.
 
 ```
-┌─────────────────┐    MCP Protocol     ┌──────────────────┐
-│   LLM Host      │◄──────────────────►│  Memory Server   │
-│ (Claude/etc.)   │   JSON-RPC 2.0     │   (Rust + ART)   │
-└─────────────────┘                     └──────────────────┘
-                                               │
-                                               ▼
-                                        ┌──────────────┐
-                                        │ Adaptive     │
-                                        │ Radix Tree   │
-                                        │ In-Memory    │
-                                        └──────────────┘
+Primary  : pri\x01<repo>\x01<rel_path>\x01<line5>:<col3>:<kind>\x01<name>
+Inverted : sym\x01<kind>\x01<name>\x01<repo>\x01<rel_path>:<line>
 ```
 
-### Key Technologies
+Prefix scan examples:
 
-- **🦀 Rust**: Memory-safe, zero-cost abstractions, predictable performance
-- **🌳 Adaptive Radix Tree**: O(k) operations, 8-52 bytes per key, cache-friendly
-- **🔌 Model Context Protocol**: Standardized LLM integration via JSON-RPC 2.0
-- **🐳 Docker**: Static-linked, distroless containers (<10MB)
-- **☸️ Kubernetes**: Production-ready with autoscaling, monitoring, security
+| Prefix | Returns |
+|---|---|
+| `pri\x01myrepo\x01` | every symbol in the repo (sorted by file, then line) |
+| `pri\x01myrepo\x01src/auth.rs\x01` | every symbol in that file (sorted by line) |
+| `pri\x01myrepo\x01src/\x01` | every symbol in `src/` |
+| `sym\x01function_item\x01parse_request\x01` | every `parse_request` function across all repos |
+| `sym\x01struct_item\x01Memory\x01` | every `Memory` struct across all repos |
 
-## 🛠 Prerequisites
-
-Install **Rust 1.76+** using [rustup](https://rustup.rs/) if you don't already
-have the toolchain:
+## Build and run
 
 ```bash
-curl https://sh.rustup.rs -sSf | sh -s -- -y
-source $HOME/.cargo/env
+cargo build --release                    # binary: target/release/blazing_art_mcp
+cargo test                               # 13 tests (7 unit + 6 integration)
+cargo clippy --all-targets -- -D warnings
+
+# Default Criterion suite (point lookup, prefix scan, bulk insert,
+# scaling sweep at 10k/100k/1M, real-data tier 1 = own src/):
+cargo bench --bench art_benchmarks
+
+# Add the 5M scaling tier (requires ~2.5 GB peak RSS):
+BLAZING_ART_BENCH_SCALE=full cargo bench --bench art_benchmarks
+
+# Real-data tiers 2 + 3 (require local repos):
+CPYTHON_LIB_PATH=$HOME/cpython/Lib       cargo bench --bench art_benchmarks
+TYPESCRIPT_SRC_PATH=$HOME/typescript/src cargo bench --bench art_benchmarks
+
+# Per-backend isolated RSS measurement (run all three for the table in BENCHMARKS.md):
+BLAZING_ART_RSS_TARGET=art      cargo bench --bench memory_rss -- --nocapture
+BLAZING_ART_RSS_TARGET=btreemap cargo bench --bench memory_rss -- --nocapture
+BLAZING_ART_RSS_TARGET=hashmap  cargo bench --bench memory_rss -- --nocapture
 ```
 
-Then you can build and test the project with `cargo build` and `cargo test`.
-
-## 🎯 Quick Start
-
-### Local Development
+### Stdio transport (default — for Claude Code / Claude Desktop)
 
 ```bash
-# Clone and build
-git clone https://github.com/JohnJBoren/blazing-art-mcp.git
-cd blazing-art-mcp
-cargo build --release
-
-# Run with sample data
 ./target/release/blazing_art_mcp \
-  --entities examples/entities.json \
-  --events examples/events.json
-
-# WebSocket mode for remote access
-./target/release/blazing_art_mcp \
-  --ws 0.0.0.0:4000 \
-  --entities examples/entities.json
+  --entities data/entities.json \
+  --events data/events.json
 ```
 
-### Docker Deployment
+### HTTP+SSE transport (for browsers and HTTP-MCP clients)
 
 ```bash
-# Build optimized container
-docker build -t blazing-art-mcp:latest .
-
-# Run with STDIO (sidecar mode)
-docker run -i --rm blazing-art-mcp:latest
-
-# Run with WebSocket (service mode)
-docker run -p 4000:4000 -p 3000:3000 blazing-art-mcp:latest \
-  --ws 0.0.0.0:4000 --health-port 3000
+./target/release/blazing_art_mcp --http 127.0.0.1:4242
+# Then visit http://127.0.0.1:4242/ for the demo UI,
+# or POST JSON-RPC to http://127.0.0.1:4242/mcp.
+# /health returns {"status":"ok"}.
 ```
 
-### Kubernetes Production
+The `--http` flag is restricted to loopback addresses by design, per MCP spec
+guidance for local servers (defends against DNS rebinding). The handler also
+validates the `Origin` header.
+
+### Smoke test
 
 ```bash
-# Deploy to Kubernetes
-kubectl apply -f k8s/deployment.yaml
-
-# Check status
-kubectl get pods -n mcp-memory
-kubectl logs -f deployment/mcp-memory -n mcp-memory
-
-# Health check
-kubectl port-forward svc/mcp-memory-service 3000:3000 -n mcp-memory
-curl http://localhost:3000/health/ready
+./test-mcp.sh                            # exercises all four legacy tools over stdio
+python3 /tmp/blazing_art_demo.py         # exercises ingestRepo / findSymbols / deleteRepo over HTTP
+                                         # (requires server running with --http 127.0.0.1:4242)
 ```
 
-## 🔧 Configuration
+## Hooking it up to a coding agent
 
-### Command Line Options
+### Claude Code (stdio)
 
-```bash
-blazing_art_mcp [OPTIONS]
-
-Options:
-  --entities <FILE>      JSON file with entity data to preload
-  --events <FILE>        JSON file with event data to preload  
-  --ws <ADDRESS>         WebSocket address (e.g., 0.0.0.0:4000)
-  --event-limit <NUM>    Max events returned by prefix search [default: 64]
-  --health-port <PORT>   Health check port [default: 3000]
-  --telemetry           Enable OpenTelemetry tracing
-  --health-check        Run health check and exit (for containers)
-```
-
-### Environment Variables
-
-```bash
-# Logging
-RUST_LOG=info                                    # Log level
-OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4317  # Telemetry endpoint
-
-# Performance tuning (set automatically)
-MIMALLOC_LARGE_OS_PAGES=1                        # Use huge pages if available
-```
-
-## 📊 MCP Protocol Interface
-
-The server exposes two primary tools via MCP:
-
-### 1. Entity Lookup
+Add to `~/.claude/claude_code_config.json`:
 
 ```json
 {
-  "tool": "lookupEntity",
-  "arguments": {
-    "name": "Albert Einstein"
+  "mcpServers": {
+    "blazing-art": {
+      "command": "/abs/path/to/blazing-art-mcp/target/release/blazing_art_mcp",
+      "args": [
+        "--entities", "/abs/path/to/blazing-art-mcp/data/entities.json",
+        "--events",   "/abs/path/to/blazing-art-mcp/data/events.json"
+      ]
+    }
   }
 }
 ```
 
-**Response:**
-```json
-{
-  "name": "Albert Einstein",
-  "summary": "Theoretical physicist, Nobel Prize 1921...",
-  "born": "1879",
-  "tags": ["physicist", "relativity", "nobel"]
-}
-```
+Then in any Claude Code session, the agent can call `ingestRepo` on a path,
+followed by `findSymbols` with prefix scans — see the schema table above.
 
-### 2. Event Search
+### Claude Code (HTTP)
+
+Run the server once with `--http 127.0.0.1:4242`, then in
+`~/.claude/claude_code_config.json`:
 
 ```json
 {
-  "tool": "findEvents", 
-  "arguments": {
-    "prefix": "2023-11"
+  "mcpServers": {
+    "blazing-art": {
+      "transport": "http",
+      "url": "http://127.0.0.1:4242/mcp"
+    }
   }
 }
 ```
 
-**Response:**
-```json
-[
-  {
-    "id": "2023-11-01:meeting",
-    "timestamp": "2023-11-01T10:00:00Z",
-    "description": "Team standup meeting",
-    "category": "work"
-  }
-]
+The HTTP path lets you share one server process across multiple agent sessions.
+
+### Browser-based chatbots
+
+Open `http://127.0.0.1:4242/` for the bundled demo. Or POST JSON-RPC straight
+from your own JS — see `static/index.html` for a 200-line vanilla-JS reference.
+
+```js
+async function lookup(name) {
+  const r = await fetch("http://127.0.0.1:4242/mcp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name: "lookupEntity", arguments: { name } },
+    }),
+  });
+  return r.json();
+}
 ```
 
-## 🏭 Production Features
+## Why ART for agent memory? (the proof)
 
-### Security Hardening
-- ✅ **Non-root containers** with distroless base images
-- ✅ **Read-only filesystems** and dropped capabilities  
-- ✅ **SBOM generation** for supply chain security
-- ✅ **Vulnerability scanning** with Trivy
-- ✅ **Network policies** for micro-segmentation
+`BENCHMARKS.md` has the full methodology, raw Criterion output, and honest
+caveats. The shortest version of the story is two charts:
 
-### Observability
-- ✅ **Health checks** (`/health/live`, `/health/ready`)
-- ✅ **Prometheus metrics** (`/metrics`) 
-- ✅ **Structured logging** with JSON output
-- ✅ **OpenTelemetry tracing** for distributed systems
-- ✅ **Graceful shutdown** with statistics logging
+**Prefix-scan latency vs N** — the workload coding agents actually run:
 
-### High Availability
-- ✅ **Horizontal Pod Autoscaling** (2-10 replicas)
-- ✅ **Pod Disruption Budgets** for rolling updates
-- ✅ **Anti-affinity rules** for zone distribution
-- ✅ **Resource limits** and quality of service
+| N (keys) | ART | BTreeMap | HashMap full-scan | ART/BTree | ART vs HashMap |
+|---|---|---|---|---|---|
+| 10k | 547 ns | 1,487 ns | 221 µs | 2.7× faster | **404× faster** |
+| 100k | 569 ns | 1,519 ns | 3,297 µs | 2.7× faster | **5,795× faster** |
+| 1M | **573 ns** | **1,448 ns** | **58,800 µs** | 2.5× faster | **102,605× faster** |
 
-## 🔬 Performance Optimizations
+ART and BTreeMap stay roughly constant as N grows. **HashMap full-scan
+grows linearly** — the only way to "prefix scan" a hash table is iterate
+every key and string-match. By 1M keys, the gap is **5 orders of
+magnitude**. The choice of backing index matters *more* as the dataset
+grows, exactly the regime agentic codebase indexing is heading toward.
 
-### Memory Allocator
-```rust
-// 2-6x performance improvement with custom allocator
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+**RSS at 1M keys** — measured per-backend in isolated processes (because
+`getrusage` returns a process-lifetime high watermark, not current):
+
+| Backend | Peak RSS delta | vs ART |
+|---|---|---|
+| **ART** (`blart::TreeMap`) | **187 MB** | **smallest** |
+| HashMap | 223 MB | +19% |
+| BTreeMap | 225 MB | +20% |
+
+ART is ~16% smaller than either alternative — path compression stores
+shared key prefixes once per branch instead of redundantly per key.
+
+**What ART is not:** ART loses point-lookup to HashMap by ~5× at 100k
+(148 µs vs 32 µs). ART is not a hash-table replacement. It's the right
+primitive when prefix queries are part of the workload — which is
+exactly what coding agents doing structured codebase navigation produce.
+
+## Repository layout
+
+```
+src/
+├── lib.rs                       # module declarations
+├── main.rs                      # CLI + transport dispatch
+├── memory.rs                    # ART-backed Memory (entities, events, symbols) + 7 unit tests
+├── protocol.rs                  # JSON-RPC 2.0 dispatch (transport-agnostic)
+├── ingest.rs                    # tree-sitter walker + key encoder
+└── transport/
+    ├── mod.rs
+    ├── stdio.rs                 # newline-delimited JSON-RPC over stdin/stdout
+    └── http.rs                  # axum: POST /mcp, GET /mcp (405), GET /health, GET /
+benches/
+├── art_benchmarks.rs            # Criterion: point/prefix/insert + scaling sweep + real-data
+├── memory_rss.rs                # standalone (harness=false), macOS-only via getrusage
+└── shared/keygen.rs             # synthetic key generator + index builders, shared by both
+tests/
+├── ingest_e2e.rs                # 6 integration tests against the fixture
+└── fixtures/sample-repo/src/    # 3-file Rust fixture (10 known declarations)
+static/index.html                # vanilla-JS web demo (no framework)
+data/                            # 2,758 entities + 896 events (AI/ML papers from Qdrant)
+examples/                        # smaller sample dataset
+BENCHMARKS.md                    # publication-ready numbers + methodology
+CLAUDE.md                        # docs-vs-reality table for future sessions
 ```
 
-### Zero-Copy Serialization
-```rust
-// 10-50x faster than standard JSON with rkyv
-use rkyv::{Archive, Serialize, Deserialize};
-```
+## Honest limits
 
-### Cache-Aligned Data Structures
-```rust
-// Optimize for CPU cache lines
-#[repr(align(64))]
-struct AlignedMemory { ... }
-```
+- **In-memory only.** No persistence yet. Restart = empty index. Re-ingest from source.
+- **Single-threaded writes.** `Arc<RwLock<TreeMap>>`. No concurrent-write story.
+  (Swap to `congee` for lock-free ART-OLC if multi-writer becomes a real workload.)
+- **No auth/TLS.** Bound to loopback. Don't expose this to the internet.
+- **Declaration nodes only.** Identifiers, expressions, statements aren't indexed —
+  only function/struct/class/trait/type definitions. Saves ~100× memory at the
+  cost of no "find every reference" capability (use an LSP for that).
+- **No incremental re-ingestion.** `ingestRepo` does a full re-parse. For
+  large repos this is a few seconds; for monorepos it could take minutes.
+- **macOS-only RSS bench.** `getrusage(ru_maxrss)` units differ by platform —
+  bytes on macOS, kilobytes on Linux. The harness `compile_error!`s on
+  non-macOS to prevent silent 1024× errors. Latency benches run anywhere.
 
-## 📈 Benchmarking
+## v0.1 milestone
 
-```bash
-# Run performance benchmarks
-cargo bench
+The five `/goal` success criteria are met with reproducible evidence:
 
-# Memory profiling
-cargo run --release -- --entities large_dataset.json &
-ps aux | grep blazing_art_mcp  # Check RSS memory
+1. ✅ `BTreeMap` gone, real `blart::TreeMap` is the index, clippy clean, 13 tests
+2. ✅ `ingestRepo` <500 ms / `findSymbols` <1 ms (own `src/` ingests in 18 ms; prefix scan ~570 ns)
+3. ✅ Stdio + HTTP+SSE transports both green against the same `Memory`
+4. ✅ ART prefix-scan ≥1.5× over `BTreeMap` and uses less RSS than `HashMap` (~16% smaller at 1M)
+5. ✅ ART exact lookup faster than embeddings (sub-µs vs typical 50ms+ — the math is in `BENCHMARKS.md`)
 
-# Load testing with WebSocket
-wrk -t12 -c400 -d30s http://localhost:4000/
-```
+**Natural follow-ups for v0.2** (deliberately out of scope for v0.1): persistence
+(snapshot on shutdown / WAL), `congee` for concurrent writes, Go/Java/C grammars,
+LSIF compatibility, side-by-side embeddings benchmark.
 
-## 🛠️ Development
+## License
 
-### Building from Source
-
-```bash
-# Development build
-cargo build
-
-# Optimized release build
-cargo build --release
-
-# With all security features
-cargo build --release --target x86_64-unknown-linux-musl
-```
-
-### Testing
-
-```bash
-# Unit tests
-cargo test
-
-# Integration tests
-cargo test --test integration
-
-# Clippy linting
-cargo clippy -- -D warnings
-
-# Security audit
-cargo audit
-```
-
-### Container Development
-
-```bash
-# Development container with hot reload
-docker build --target development -t mcp-memory:dev .
-docker run -v $(pwd):/app mcp-memory:dev
-
-# Security scanning
-docker build --target security-scan -t mcp-memory:scan .
-docker run --rm mcp-memory:scan cat /tmp/trivy-report.sarif
-```
-
-## 🔄 Data Management
-
-### Loading Data
-
-**Entities** (`entities.json`):
-```json
-[
-  {
-    "name": "Claude Shannon",
-    "summary": "Father of information theory...",
-    "born": "1916",
-    "tags": ["mathematician", "information-theory"]
-  }
-]
-```
-
-**Events** (`events.json`):
-```json
-[
-  {
-    "id": "2024-01-15:discovery",
-    "timestamp": "2024-01-15T14:30:00Z", 
-    "description": "Major breakthrough in quantum computing",
-    "category": "science"
-  }
-]
-```
-
-### Persistence Strategies
-
-1. **Snapshot Loading**: Mount JSON files for initial data load
-2. **Runtime Updates**: Use MCP tools for dynamic mutations  
-3. **Graceful Persistence**: Flush to disk on shutdown signals
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Container fails health check:**
-```bash
-# Check health endpoint directly
-docker exec -it <container> /blazing_art_mcp --health-check
-
-# Verify port binding
-docker ps | grep mcp-memory
-```
-
-**High memory usage:**
-```bash
-# Check ART statistics
-curl http://localhost:3000/metrics
-
-# Verify data size vs memory usage ratio
-```
-
-**Performance degradation:**
-```bash
-# Enable debug logging
-RUST_LOG=debug ./blazing_art_mcp
-
-# Check for JSON serialization bottlenecks in traces
-```
-
-## 📝 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature` 
-5. Open a Pull Request
-
-## 🙏 Acknowledgments
-
-- [Anthropic](https://anthropic.com) for the Model Context Protocol
-- [ART Paper](https://db.in.tum.de/~leis/papers/ART.pdf) by Leis et al.
-- [art-tree](https://crates.io/crates/art-tree) Rust implementation
-- [rmcp](https://github.com/modelcontextprotocol/rust-sdk) official Rust MCP SDK
-
----
-
-**Built with ❤️ for the future of AI-powered applications**
+MIT — see [LICENSE](LICENSE).
