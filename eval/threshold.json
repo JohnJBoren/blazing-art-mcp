@@ -1,0 +1,18 @@
+{
+  "_comment": "Eval CI gate thresholds — scripts/check_eval_threshold.sh reads the latest eval/results/*.json and exits non-zero if any of these floors are violated. Bump as retrieval quality improves to lock in the gains.",
+  "recall": {
+    "at_1":  0.30,
+    "at_5":  0.50,
+    "at_20": 0.65
+  },
+  "mrr": {
+    "floor": 0.40
+  },
+  "categories": {
+    "ambiguous":      { "recall_at_5": 0.50 },
+    "cross_language": { "recall_at_5": 0.50 },
+    "long_tail":      { "recall_at_5": 0.40 },
+    "rename":         { "recall_at_5": 0.30 },
+    "negative":       { "empty_correctness": 0.80 }
+  }
+}

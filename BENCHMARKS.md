@@ -226,3 +226,109 @@ Hardware for all numbers above: Apple Silicon (Darwin 25.5.0, ARM64),
 `mimalloc` global allocator.
 
 Full Criterion HTML report: `target/criterion/report/index.html`.
+
+
+---
+
+# v0.2 results (2026-05)
+
+v0.2 layered three new things on top of the v0.1 numbers above: **parallel
+ingest**, **retrieval-quality eval**, and **live-harness integration tests**.
+This section captures those.
+
+## Parallel ingest (Task 4)
+
+Wall-clock cold-ingest measured via the `bench_parallel_ingest` Criterion group.
+Each iteration starts from an empty `Memory` and runs the full pipeline:
+walk → rayon parse → bulk insert under a single write lock. Per-thread parser
+pool via `thread_local!`; shared `Arc<Query>` per language compiled once via
+`OnceLock`. Refs are turned ON (so each repo produces 5–20× more entries than
+the v0.1 def-only numbers).
+
+| Target | Files | Indexed entries | Wall clock |
+|---|---|---|---|
+| own `src/` | 8 (.rs) | 748 | **6.0 ms** |
+| axum 0.8.9 | 60 (.rs) | (varies) | **28.0 ms** |
+
+Reproduce:
+
+```bash
+cargo bench --bench art_benchmarks bench_parallel_ingest
+
+# Optional bigger tiers (set the path to a checkout you have locally):
+CPYTHON_LIB_PATH=$HOME/cpython/Lib       cargo bench --bench art_benchmarks bench_parallel_ingest
+TYPESCRIPT_SRC_PATH=$HOME/typescript/src cargo bench --bench art_benchmarks bench_parallel_ingest
+```
+
+Implication: at this rate, a 5,000-file Rust monorepo cold-ingests in roughly
+**~2.5 s** on M-series silicon, well under the v0.2 plan's <5 s gate.
+The ART-side write lock is not the bottleneck at these scales — bulk insert
+under a single lock is faster than per-symbol locking by an order of magnitude.
+
+## Retrieval-quality eval (Task 8)
+
+Scored against the 30-record hand-curated gold set
+(`eval/goldset/handcurated.jsonl`) covering five categories: ambiguous names,
+cross-language, refactor scenarios, long-tail languages, and negative cases.
+
+| Metric | Value | Floor (eval/threshold.json) |
+|---|---|---|
+| Recall@1 | **0.96** | 0.30 |
+| Recall@5 | **1.00** | 0.50 |
+| Recall@20 | **1.00** | 0.65 |
+| MRR | **0.98** | 0.40 |
+| Latency p50 | 0 μs | — |
+| Latency p99 | 4 μs | — |
+| Negative correctness | 1.00 | 0.80 |
+
+Reproduce:
+
+```bash
+cargo run --release --bin eval_goldset
+bash scripts/check_eval_threshold.sh   # exits non-zero if any floor is violated
+```
+
+Per-run results land in `eval/results/<sha>-<unix-ts>.{json,md}`. The CI gate
+in `.github/workflows/ci.yml` (`eval` job) calls
+`scripts/check_eval_threshold.sh` automatically on every push and PR.
+
+> **Caveat.** The hand-curated set points at the in-tree fixtures
+> (`tests/fixtures/sample-repo` and `tests/fixtures/sample-multilang`) and is
+> therefore self-consistent by construction — these numbers measure
+> **functional correctness of the index**, not relevance against unfamiliar
+> repos. Real-world relevance is a future work item, intentionally deferred
+> to Layer 3 (live-harness) eval below.
+
+## Live-harness integration (Tasks 9 + 10)
+
+Two scripts drive real coding-agent harnesses through the same set of 10
+prompts, comparing **treatment** (with the blazing-art MCP server enabled)
+vs **control** (no MCP servers). Per-prompt regex assertions in
+`tests/harness/asserts.txt` require the treatment transcript to match a
+"correct answer" pattern AND require the control transcript to NOT match it
+— so a prompt only passes if the index is genuinely the source of the
+answer.
+
+| Harness | Driver | Wire-up | Skip if missing |
+|---|---|---|---|
+| Claude Code | `claude -p "<prompt>" --mcp-config <tmp>` | temp JSON config | `claude` not on PATH or no `ANTHROPIC_API_KEY` |
+| kiro-cli | `kiro-cli chat --no-interactive --trust-all-tools "<prompt>"` | `kiro-cli mcp add --scope workspace --force` | `kiro-cli` not on PATH |
+
+Reproduce (locally — these cost real LLM API calls):
+
+```bash
+# Requires `claude` on PATH and ANTHROPIC_API_KEY in env.
+bash tests/harness/run_claude_code.sh
+
+# Requires `kiro-cli` on PATH; uses workspace MCP scope, removes registration on exit.
+bash tests/harness/run_kiro_cli.sh
+```
+
+Both are syntax-validated (`bash -n`) and **bash-3.2-portable** (macOS default
+shell — no `declare -A`). Both skip gracefully and exit 0 if their CLI
+dependency isn't available, so they are safe to invoke unconditionally
+in CI without burning API credits.
+
+In GitHub Actions, the harness jobs are gated to `workflow_dispatch` only
+(see `.github/workflows/ci.yml`) and require an `inputs.run_harnesses=true`
+toggle plus an `ANTHROPIC_API_KEY` repo secret.

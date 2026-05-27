@@ -1,6 +1,6 @@
 [package]
 name = "blazing-art-mcp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["John Boren <john@example.com>"]
 description = "⚡ Blazing-fast MCP server delivering microsecond-latency structured memory for LLMs"
@@ -16,6 +16,19 @@ path = "src/lib.rs"
 [[bin]]
 name = "blazing_art_mcp"
 path = "src/main.rs"
+
+# v0.2 Task 6: gold-set generator. Walks git log of a target repo and emits
+# JSONL records of (commit subject -> single matching declaration in the
+# repo's index) for use by the eval runner.
+[[bin]]
+name = "build_goldset"
+path = "src/bin/build_goldset.rs"
+
+# v0.2 Task 8: gold-set eval runner. Loads JSONL records, ingests each
+# referenced repo, runs the queries, scores Recall@K / MRR / latency.
+[[bin]]
+name = "eval_goldset"
+path = "src/bin/eval_goldset.rs"
 
 [dependencies]
 # Core dependencies
@@ -37,12 +50,24 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
 
-# Tree-sitter AST ingestion (Phase 4) — Rust + Python + TypeScript/TSX
+# Tree-sitter AST ingestion (Phase 4) — Rust + Python + TypeScript/TSX in v0.1;
+# v0.2 Task 3 added Go, Java, C, C++, JavaScript (9 grammars total).
 tree-sitter = "0.26"
 tree-sitter-rust = "0.24"
 tree-sitter-python = "0.25"
 tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-javascript = "0.25"
 walkdir = "2.5"
+
+# Parallel ingest (v0.2 Task 4)
+rayon = "1.10"
+
+# Gold-set generator (v0.2 Task 6) — used in src/bin/build_goldset.rs.
+regex = "1"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
@@ -63,6 +88,7 @@ tikv-jemallocator = "0.6"
 criterion = { version = "0.5", features = ["html_reports"] }
 tokio-test = "0.4"
 libc = "0.2"   # for getrusage in the memory_rss bench (Phase 6.2)
+proptest = "1"  # Property-based tests (v0.2 Task 5)
 
 [[bench]]
 name = "art_benchmarks"

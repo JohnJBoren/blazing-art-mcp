@@ -1,0 +1,7 @@
+{
+  "_comment": "Maps repo_id (as used in goldset records) to a path relative to the cargo manifest dir. Add new entries when authoring records that reference new repos.",
+  "repos": {
+    "sample-repo": "tests/fixtures/sample-repo",
+    "multilang":   "tests/fixtures/sample-multilang"
+  }
+}

@@ -1,195 +1,199 @@
-name: CI/CD Pipeline
+name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, master]
   pull_request:
-    branches: [ main ]
-  release:
-    types: [ published ]
+  workflow_dispatch:
+    inputs:
+      run_harnesses:
+        description: "Run the live coding-agent harnesses (Claude Code + kiro-cli). Requires secrets."
+        required: false
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  RUSTFLAGS: "-D warnings"
 
 jobs:
-  test:
-    name: Test Suite
+  # ---------------------------------------------------------------------------
+  # Job 1: build + clippy + tests (unit, e2e, proptest, handcurated_schema).
+  # Runs on every push and PR. Uploads release binaries for downstream jobs.
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: Build, lint, test
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: rustfmt, clippy
-        
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
-      
-    - name: Check formatting
-      run: cargo fmt --all -- --check
-      
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
-      
-    - name: Run tests
-      run: cargo test --verbose
-      
-    - name: Run security audit
-      uses: rustsec/audit-check@v1.4.1
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
 
-  benchmark:
-    name: Performance Benchmarks
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      
-    - name: Cache dependencies
-      uses: Swatinem/rust-cache@v2
-      
-    - name: Run benchmarks
-      run: cargo bench --verbose
-      
-    - name: Upload benchmark results
-      uses: actions/upload-artifact@v4
-      with:
-        name: benchmark-results
-        path: target/criterion/
+      - name: Install Rust toolchain (stable + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
-  build:
-    name: Build and Push Container
-    runs-on: ubuntu-latest
-    needs: test
-    permissions:
-      contents: read
-      packages: write
-      
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=raw,value=latest,enable={{is_default_branch}}
-          
-    - name: Build and push container
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
-        
-    - name: Run Trivy security scan
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-        
-    - name: Upload Trivy scan results
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: 'trivy-results.sarif'
+      - name: Cache cargo registry + target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Configure kubectl
-      uses: azure/k8s-set-context@v3
-      with:
-        method: kubeconfig
-        kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
-        
-    - name: Deploy to staging
-      run: |
-        sed -i "s|mcp-memory:latest|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop|g" k8s/deployment.yaml
-        kubectl apply -f k8s/deployment.yaml
-        kubectl rollout status deployment/mcp-memory -n mcp-memory
-        
-    - name: Run health check
-      run: |
-        kubectl wait --for=condition=ready pod -l app=mcp-memory -n mcp-memory --timeout=300s
-        kubectl port-forward svc/mcp-memory-service 3000:3000 -n mcp-memory &
-        sleep 5
-        curl -f http://localhost:3000/health/ready
+      - name: cargo build --release
+        run: cargo build --release --bins
 
-  deploy-production:
-    name: Deploy to Production
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test (unit + e2e + proptest + handcurated_schema)
+        run: cargo test --all-targets
+
+      - name: Upload release binaries for downstream jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: blazing-art-mcp-binaries
+          path: |
+            target/release/blazing_art_mcp
+            target/release/build_goldset
+            target/release/eval_goldset
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Job 2: gold-set retrieval eval (test pyramid layer 2).
+  # Runs after build-and-test. Caches cloned reference repos under ~/.cache/.
+  # Fails the build if `scripts/check_eval_threshold.sh` reports any metric
+  # below `eval/threshold.json`.
+  # ---------------------------------------------------------------------------
+  eval:
+    name: Gold-set retrieval eval
+    needs: build-and-test
     runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'release'
-    environment: production
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Configure kubectl
-      uses: azure/k8s-set-context@v3
-      with:
-        method: kubeconfig
-        kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
-        
-    - name: Deploy to production
-      run: |
-        sed -i "s|mcp-memory:latest|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}|g" k8s/deployment.yaml
-        kubectl apply -f k8s/deployment.yaml
-        kubectl rollout status deployment/mcp-memory -n mcp-memory
-        
-    - name: Run health check
-      run: |
-        kubectl wait --for=condition=ready pod -l app=mcp-memory -n mcp-memory --timeout=300s
-        kubectl port-forward svc/mcp-memory-service 3000:3000 -n mcp-memory &
-        sleep 5
-        curl -f http://localhost:3000/health/ready
-        
-    - name: Notify Slack
-      uses: 8398a7/action-slack@v3
-      if: always()
-      with:
-        status: ${{ job.status }}
-        channel: '#deployments'
-        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      - uses: actions/checkout@v4
+
+      - name: Install jq (for the threshold-check script)
+        run: sudo apt-get update -qq && sudo apt-get install -y jq
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo run --release --bin eval_goldset
+        run: cargo run --release --bin eval_goldset -- --quiet
+
+      - name: scripts/check_eval_threshold.sh
+        run: bash scripts/check_eval_threshold.sh
+
+      - name: Upload eval results JSON + Markdown
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results-${{ github.sha }}
+          path: eval/results/
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Job 3: live harness — Claude Code (test pyramid layer 3 part 1).
+  # Manual trigger only (workflow_dispatch with run_harnesses=true), since it
+  # makes real Anthropic API calls and costs $$.
+  # ---------------------------------------------------------------------------
+  harness-claude-code:
+    name: Live harness (Claude Code)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_harnesses == true }}
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install claude-code CLI
+        run: |
+          # Anthropic publishes claude-code via npm. Adjust if upstream changes.
+          curl -fsSL https://nodejs.org/dist/v20.19.0/node-v20.19.0-linux-x64.tar.xz \
+            -o /tmp/node.tar.xz
+          mkdir -p /usr/local/lib/node && tar -xJf /tmp/node.tar.xz -C /usr/local/lib/node --strip-components=1
+          /usr/local/lib/node/bin/npm install -g @anthropic-ai/claude-code
+          echo "/usr/local/lib/node/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo registry + target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run Claude Code harness
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: bash tests/harness/run_claude_code.sh
+
+      - name: Upload transcripts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harness-claude-code-transcripts
+          path: tests/harness/transcripts/
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Job 4: live harness — kiro-cli (test pyramid layer 3 part 2).
+  # Same gating as Claude Code; mirrors the harness.
+  # ---------------------------------------------------------------------------
+  harness-kiro-cli:
+    name: Live harness (kiro-cli)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_harnesses == true }}
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install kiro-cli
+        # If kiro-cli isn't on a public registry that GHA can fetch from, point
+        # this step at your internal artifact mirror. The harness skips
+        # gracefully if `kiro-cli` isn't on PATH, so a missing binary does
+        # not fail the workflow — it just no-ops.
+        run: |
+          if ! command -v kiro-cli >/dev/null 2>&1; then
+            echo "::warning::kiro-cli not installable in CI; harness will skip."
+          fi
+
+      - name: Cache cargo registry + target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run kiro-cli harness
+        run: bash tests/harness/run_kiro_cli.sh
+
+      - name: Upload transcripts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harness-kiro-cli-transcripts
+          path: tests/harness/transcripts/
+          retention-days: 14

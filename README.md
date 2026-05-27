@@ -16,7 +16,7 @@ agents actually run — prefix scans over symbol-shaped keys.
 | JSON-RPC dispatch | `src/protocol.rs` |
 | Stdio MCP transport | `src/transport/stdio.rs` |
 | HTTP+SSE MCP transport (axum, spec 2025-06-18) | `src/transport/http.rs` |
-| Tree-sitter AST ingestion (Rust, Python, TypeScript, TSX) | `src/ingest.rs` |
+| Tree-sitter AST ingestion (Rust, Python, TypeScript, TSX, **Go, Java, C, C++, JavaScript** — v0.2) | `src/ingest.rs`, `queries/<lang>/tags.scm` |
 | Criterion benchmarks (point/prefix/insert + scaling sweep + real-data) | `benches/art_benchmarks.rs` |
 | Per-backend isolated RSS measurement (macOS-only) | `benches/memory_rss.rs` |
 | Shared synthetic key generator | `benches/shared/keygen.rs` |
@@ -32,9 +32,10 @@ agents actually run — prefix scans over symbol-shaped keys.
 | `addEntity(name, summary, born?, tags)` | Insert/update an entity. |
 | `findEvents(prefix)` | ART prefix scan over event ids (capped by `--event-limit`). |
 | `addEvent(id?, timestamp?, description, category)` | Insert/update an event. |
-| `ingestRepo(path, repo_id?)` | Walk a repo, parse `.rs/.py/.ts/.tsx` with tree-sitter, index every declaration symbol under both a primary and an inverted ART key. |
+| `ingestRepo(path, repo_id?)` | Walk a repo, parse `.rs/.py/.ts/.tsx/.go/.java/.c/.cpp/.js` with tree-sitter, index every declaration **and reference** symbol via the `tags.scm`-driven engine (v0.2). Each declaration writes a primary + inverted key; each reference writes a `ref\x01...` key. Parse stage runs in parallel via `rayon`. |
 | `findSymbols(prefix, limit?)` | ART prefix scan over the symbol index. See key schema below. |
-| `deleteRepo(repo_id)` | Remove every symbol entry for a repo. |
+| `findReferences(name, kind?, repo?, limit?)` | **(v0.2)** Find every call-site / use of a symbol by name across the index. Backed by a single prefix scan over the `ref\x01<name>\x01...` namespace; `kind` and `repo` further tighten the filter server-side. |
+| `deleteRepo(repo_id)` | Remove every symbol entry for a repo (definitions and references). |
 
 ## Key schema (locked — don't change without re-checking `blart::NoPrefixesBytes`)
 
@@ -152,6 +153,34 @@ Run the server once with `--http 127.0.0.1:4242`, then in
 
 The HTTP path lets you share one server process across multiple agent sessions.
 
+### kiro-cli (stdio)
+
+```bash
+kiro-cli mcp add \
+    --name blazing-art \
+    --scope workspace \
+    --command /abs/path/to/blazing-art-mcp/target/release/blazing_art_mcp \
+    --args "--entities,/abs/path/to/data/entities.json,--events,/abs/path/to/data/events.json"
+
+# Optional but recommended for slow first-ingest:
+kiro-cli settings mcp.noInteractiveTimeout 60000
+```
+
+Then in any kiro-cli chat session, the agent has `ingestRepo`, `findSymbols`,
+`findReferences`, and the rest. To remove later: `kiro-cli mcp remove --name blazing-art`.
+
+### Codex CLI (stdio)
+
+OpenAI's Codex CLI supports MCP servers over stdio only (no remote HTTP). Add
+this to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.blazing_art]
+command = "/abs/path/to/blazing-art-mcp/target/release/blazing_art_mcp"
+args = ["--entities", "/abs/path/to/data/entities.json",
+        "--events",   "/abs/path/to/data/events.json"]
+```
+
 ### Browser-based chatbots
 
 Open `http://127.0.0.1:4242/` for the bundled demo. Or POST JSON-RPC straight
@@ -206,6 +235,35 @@ shared key prefixes once per branch instead of redundantly per key.
 (148 µs vs 32 µs). ART is not a hash-table replacement. It's the right
 primitive when prefix queries are part of the workload — which is
 exactly what coding agents doing structured codebase navigation produce.
+
+## Tests (three layers — v0.2)
+
+```bash
+# Layer 1 — unit + e2e + property/fuzz (fast; runs on every push).
+cargo test --all-targets
+#   ↳ 30 tests:
+#      15 unit (memory + ingest)
+#       8 e2e (sample-repo + multilang fixtures)
+#       3 proptest (oracle vs BTreeMap, key round-trip, concurrent chaos)
+#       4 handcurated_schema (gold-set sanity)
+
+# Layer 2 — gold-set retrieval eval (runs on every push; gates merges).
+cargo run --release --bin eval_goldset
+bash scripts/check_eval_threshold.sh
+#   ↳ Recall@1 / @5 / @20, MRR, p50/p99, per-category breakdowns;
+#     fails if any metric below floors in eval/threshold.json.
+
+# Layer 3 — live coding-agent harnesses (manual; cost real LLM API calls).
+bash tests/harness/run_claude_code.sh    # skips if `claude` not installed
+bash tests/harness/run_kiro_cli.sh       # skips if `kiro-cli` not installed
+#   ↳ Drives each agent through 10 scripted prompts under
+#     treatment (MCP enabled) vs control (no MCP); regex assertions
+#     in tests/harness/asserts.txt require treatment to match the
+#     correct answer AND control to MISS it.
+```
+
+CI workflow: see `.github/workflows/ci.yml`. Layers 1 + 2 run on every push and
+PR; layer 3 is gated to `workflow_dispatch` because it costs real API credits.
 
 ## Repository layout
 

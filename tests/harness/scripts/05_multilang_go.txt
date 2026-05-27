@@ -1,0 +1,1 @@
+After ingesting tests/fixtures/sample-multilang via the blazing-art MCP server, use findSymbols with prefix sym\u0001method\u0001Norm\u0001 to find the Go Norm method. Report its file path.

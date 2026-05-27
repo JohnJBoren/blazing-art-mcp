@@ -17,6 +17,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::ingest::AstSymbol;
 
+/// Stats returned by [`Memory::ingest_stats`]: total entry count, definition
+/// vs reference split, and per-kind histogram, all computed under a single
+/// read lock for consistency. Distinct from `ingest::IngestStats`, which is
+/// the parser-side per-call summary.
+#[derive(Clone, Serialize, Deserialize, Debug, Default)]
+pub struct IngestStats {
+    pub total: usize,
+    pub definitions: usize,
+    pub references: usize,
+    pub per_kind: std::collections::BTreeMap<String, usize>,
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Entity {
     pub name: String,
@@ -110,6 +122,27 @@ impl Memory {
         true
     }
 
+    /// Bulk-insert a batch of `(key, AstSymbol)` pairs under a single write lock.
+    ///
+    /// This is the hot path for `ingest::ingest_repo`. With rayon parallelizing
+    /// the parse step, the writer side becomes the bottleneck if every symbol
+    /// re-acquires the lock; taking it once for the whole batch is ~one order of
+    /// magnitude faster on multi-thousand-symbol repos.
+    ///
+    /// Returns the number of pairs successfully inserted (skips any whose
+    /// key contains an interior NUL).
+    pub fn add_symbols_bulk(&self, pairs: Vec<(String, AstSymbol)>) -> usize {
+        let mut inserted = 0;
+        let mut guard = self.symbols.write();
+        for (key, sym) in pairs {
+            if let Ok(k) = CString::new(key.into_bytes()) {
+                guard.insert(k, sym);
+                inserted += 1;
+            }
+        }
+        inserted
+    }
+
     /// Find AST symbols whose key starts with the given prefix. The caller chooses
     /// the namespace by writing the appropriate prefix:
     /// - `"pri\x01<repo>\x01<path>\x01"` — every symbol in one file (sorted by line)
@@ -148,6 +181,53 @@ impl Memory {
             }
         }
         removed
+    }
+
+    /// One-shot stats over the symbol index, scoped optionally to a single repo.
+    /// Returns total entry count + per-kind histogram, computed under a single
+    /// read lock so the count is internally consistent. v0.2 Task 12.
+    ///
+    /// Key namespaces split per-entry:
+    ///   * `pri\x01...` — definition primary keys (1 per def)
+    ///   * `sym\x01...` — definition inverted keys (1 per def)
+    ///   * `ref\x01...` — reference keys (1 per ref)
+    ///
+    /// We count only the **primary** def keys (so each definition counts once)
+    /// and **all** reference keys; the per-kind histogram aggregates over both.
+    pub fn ingest_stats(&self, repo_filter: Option<&str>) -> IngestStats {
+        let mut total = 0usize;
+        let mut definitions = 0usize;
+        let mut references = 0usize;
+        let mut per_kind: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+
+        let guard = self.symbols.read();
+        for (k, v) in guard.iter() {
+            if let Some(r) = repo_filter {
+                if v.repo != r {
+                    continue;
+                }
+            }
+            let bytes = k.as_bytes();
+            // Skip the inverted-def namespace — we count via `pri\x01...` to
+            // avoid double-counting definitions.
+            if bytes.starts_with(b"sym\x01") {
+                continue;
+            }
+            total += 1;
+            if bytes.starts_with(b"pri\x01") {
+                definitions += 1;
+            } else if bytes.starts_with(b"ref\x01") {
+                references += 1;
+            }
+            *per_kind.entry(v.kind.clone()).or_default() += 1;
+        }
+        IngestStats {
+            total,
+            definitions,
+            references,
+            per_kind,
+        }
     }
 
     pub fn load_entities(&self, path: &PathBuf) -> Result<()> {
@@ -284,5 +364,54 @@ mod tests {
         mem.add_event(evt("a"));
         mem.add_event(evt("b"));
         assert_eq!(mem.event_count(), 2);
+    }
+
+    #[test]
+    fn ingest_stats_counts_defs_and_refs_separately() {
+        let mem = Memory::new(100);
+        let pri = AstSymbol {
+            repo: "r".into(),
+            path: "p".into(),
+            line: 1,
+            col: 1,
+            kind: "function".into(),
+            name: "foo".into(),
+            role: crate::ingest::SymbolRole::Definition,
+        };
+        let pri2 = AstSymbol { name: "bar".into(), ..pri.clone() };
+        let r1 = AstSymbol {
+            kind: "call".into(),
+            name: "foo".into(),
+            role: crate::ingest::SymbolRole::Reference,
+            ..pri.clone()
+        };
+        let r2 = AstSymbol { name: "bar".into(), ..r1.clone() };
+        let r3 = AstSymbol { name: "foo".into(), ..r1.clone() };
+
+        // Two definitions (each writes pri + sym keys = 4 entries) and three references
+        // (each writes one ref key = 3 entries). Total raw insert = 7 keys.
+        let _ = mem.add_symbols_bulk(vec![
+            ("pri\x01r\x01p\x0100001:001:function\x01foo".into(), pri.clone()),
+            ("sym\x01function\x01foo\x01r\x01p:1".into(), pri),
+            ("pri\x01r\x01p\x0100002:001:function\x01bar".into(), pri2.clone()),
+            ("sym\x01function\x01bar\x01r\x01p:2".into(), pri2),
+            ("ref\x01foo\x01r\x01p:10".into(), r1),
+            ("ref\x01bar\x01r\x01p:11".into(), r2),
+            ("ref\x01foo\x01r\x01p:12".into(), r3),
+        ]);
+
+        let s = mem.ingest_stats(None);
+        // ingest_stats counts via pri\x01... (def, 2) + ref\x01... (ref, 3) = 5 unique entries.
+        assert_eq!(s.total, 5);
+        assert_eq!(s.definitions, 2);
+        assert_eq!(s.references, 3);
+        // Per-kind counts: function appears 2× (defs), call appears 3× (refs).
+        assert_eq!(s.per_kind.get("function").copied(), Some(2));
+        assert_eq!(s.per_kind.get("call").copied(), Some(3));
+
+        // Repo filter: scoping to "other" returns 0 of everything.
+        let s_other = mem.ingest_stats(Some("other"));
+        assert_eq!(s_other.total, 0);
+        assert_eq!(s_other.per_kind.len(), 0);
     }
 }

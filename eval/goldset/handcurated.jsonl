@@ -1,0 +1,30 @@
+{"query":"Circle constructor new","repo":"sample-repo","path":"src/geometry.rs","kind":"method","name":"new","role":"definition","category":"ambiguous"}
+{"query":"origin returning Coordinate","repo":"sample-repo","path":"src/lib.rs","kind":"function","name":"origin","role":"definition","category":"ambiguous"}
+{"query":"add two integers","repo":"sample-repo","path":"src/math.rs","kind":"function","name":"add","role":"definition","category":"ambiguous"}
+{"query":"area of a rectangle","repo":"sample-repo","path":"src/geometry.rs","kind":"function","name":"area","role":"definition","category":"ambiguous"}
+{"query":"compute multiplication of two numbers","repo":"sample-repo","path":"src/math.rs","kind":"function","name":"multiply","role":"definition","category":"ambiguous"}
+{"query":"struct holding x and y coordinates","repo":"sample-repo","path":"src/lib.rs","kind":"class","name":"Coordinate","role":"definition","category":"ambiguous"}
+{"query":"main entry point in Go","repo":"multilang","path":"main.go","kind":"function","name":"main","role":"definition","category":"cross_language"}
+{"query":"main entry point in C","repo":"multilang","path":"point.c","kind":"function","name":"main","role":"definition","category":"cross_language"}
+{"query":"main entry point in Java","repo":"multilang","path":"Greeter.java","kind":"method","name":"main","role":"definition","category":"cross_language"}
+{"query":"origin function returning struct","repo":"multilang","path":"point.c","kind":"function","name":"origin","role":"definition","category":"cross_language"}
+{"query":"Counter class with bump method","repo":"multilang","path":"counter.js","kind":"class","name":"Counter","role":"definition","category":"cross_language"}
+{"query":"rename area to surface_area","repo":"sample-repo","path":"src/geometry.rs","kind":"function","name":"area","role":"definition","category":"rename"}
+{"query":"rename Coordinate struct to Point","repo":"sample-repo","path":"src/lib.rs","kind":"class","name":"Coordinate","role":"definition","category":"rename"}
+{"query":"rename add to plus","repo":"sample-repo","path":"src/math.rs","kind":"function","name":"add","role":"definition","category":"rename"}
+{"query":"rename Greeter class to Salutation","repo":"multilang","path":"Greeter.java","kind":"class","name":"Greeter","role":"definition","category":"rename"}
+{"query":"rename Counter to Tally","repo":"multilang","path":"counter.js","kind":"class","name":"Counter","role":"definition","category":"rename"}
+{"query":"Go method computing vector norm","repo":"multilang","path":"main.go","kind":"method","name":"Norm","role":"definition","category":"long_tail"}
+{"query":"Java method that returns greeting","repo":"multilang","path":"Greeter.java","kind":"method","name":"greet","role":"definition","category":"long_tail"}
+{"query":"C++ free function returning a cube","repo":"multilang","path":"box.cpp","kind":"function","name":"cube","role":"definition","category":"long_tail"}
+{"query":"JavaScript method incrementing counter","repo":"multilang","path":"counter.js","kind":"method","name":"bump","role":"definition","category":"long_tail"}
+{"query":"C function translating a point","repo":"multilang","path":"point.c","kind":"function","name":"translate","role":"definition","category":"long_tail"}
+{"query":"Go type for 3D vector","repo":"multilang","path":"main.go","kind":"type","name":"Vec3","role":"definition","category":"long_tail"}
+{"query":"Java class wrapping a name","repo":"multilang","path":"Greeter.java","kind":"class","name":"Greeter","role":"definition","category":"long_tail"}
+{"query":"C++ class representing a 3d box","repo":"multilang","path":"box.cpp","kind":"class","name":"Box","role":"definition","category":"long_tail"}
+{"query":"JavaScript wrapper that calls bump on counter","repo":"multilang","path":"counter.js","kind":"function","name":"increment","role":"definition","category":"long_tail"}
+{"query":"function nonexistent_xyzabc","role":"definition","category":"negative","must_be_empty":true,"repo":"sample-repo","path":"","kind":"","name":"nonexistent_xyzabc"}
+{"query":"deprecated removed feature","role":"definition","category":"negative","must_be_empty":true,"repo":"sample-repo","path":"","kind":"","name":"weather_forecast_api"}
+{"query":"blockchain consensus algorithm","role":"definition","category":"negative","must_be_empty":true,"repo":"multilang","path":"","kind":"","name":"BlockchainConsensus"}
+{"query":"neural network training loop","role":"definition","category":"negative","must_be_empty":true,"repo":"multilang","path":"","kind":"","name":"NeuralTrainer"}
+{"query":"distributed transaction coordinator","role":"definition","category":"negative","must_be_empty":true,"repo":"sample-repo","path":"","kind":"","name":"TransactionCoord"}

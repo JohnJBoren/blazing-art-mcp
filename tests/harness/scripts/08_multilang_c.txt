@@ -1,0 +1,1 @@
+After ingesting tests/fixtures/sample-multilang via the blazing-art MCP server, use findSymbols with prefix sym\u0001function\u0001translate\u0001 to find the C translate function. Report the line number.

@@ -1,0 +1,48 @@
+# Format: each stanza is one prompt's assertions. Three lines:
+#   <id>
+#   T:<regex>     # MUST match treatment transcript (case-insensitive)
+#   C-:<regex>    # MUST NOT match control transcript (i.e. only the MCP-enabled run can answer)
+# Blank line separates stanzas. Lines starting with `#` are comments.
+#
+# Match logic: the harness greps each assertion against the recorded
+# transcript; T: lines are required to hit, C-: lines are required to miss.
+
+01
+T:(9|nine).{0,12}(declarations|symbols)
+C-:(9|nine).{0,12}declarations.{0,40}sample-repo
+
+02
+T:(geometry\.rs).{0,40}(Circle|class)
+C-:Circle.{0,40}geometry\.rs:.{0,5}\d+
+
+03
+T:(geometry\.rs).{0,80}(impl|reference|usage|memory\.rs)
+C-:reference|impl Circle
+
+04
+T:Greeter\.java
+C-:Greeter\.java
+
+05
+T:main\.go
+C-:Norm.{0,40}main\.go
+
+06
+T:add.{0,80}(subtract|multiply)
+C-:add.{0,40}subtract.{0,40}multiply
+
+07
+T:Circle.{0,200}(geometry\.rs|impl|reference)
+C-:Circle.{0,200}reference.{0,80}geometry\.rs
+
+08
+T:point\.c
+C-:translate.{0,40}point\.c:.{0,5}\d+
+
+09
+T:(empty|no results|0|none)
+C-:NonExistentSymbol
+
+10
+T:main\.go.{0,400}point\.c|point\.c.{0,400}main\.go
+C-:main.{0,400}main\.go.{0,400}point\.c

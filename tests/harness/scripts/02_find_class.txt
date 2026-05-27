@@ -1,0 +1,1 @@
+After ingesting tests/fixtures/sample-repo via the blazing-art MCP server, use findSymbols to locate the `Circle` class. Report the file path and line number.

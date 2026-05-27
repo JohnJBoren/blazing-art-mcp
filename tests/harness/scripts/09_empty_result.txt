@@ -1,0 +1,1 @@
+After ingesting tests/fixtures/sample-repo via the blazing-art MCP server, use findSymbols with prefix sym\u0001class\u0001NonExistentSymbol\u0001 — confirm that this returns an empty result.

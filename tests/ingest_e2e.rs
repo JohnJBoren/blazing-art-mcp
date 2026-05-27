@@ -64,13 +64,23 @@ fn discover_symbol_count() {
 }
 
 #[test]
-fn dual_key_invariant_total_is_even() {
+fn dual_key_invariant_def_pri_equals_def_inv() {
+    // Each @definition.* match writes BOTH a pri\x01... primary key and a
+    // sym\x01... inverted key. Each @reference.* match writes ONE ref\x01...
+    // entry. So the dual-key invariant applies only to the definition side:
+    // pri count == inv count, and total = 2*pri + ref.
     let mem = fresh_memory();
     let stats = ingest::ingest_repo(&mem, REPO_ID, &fixture_path());
+
+    let pri = mem.find_symbols(&format!("pri\x01{REPO_ID}\x01"), 1000);
+    let inv = mem.find_symbols("sym\x01", 1000);
+    let refs = mem.find_symbols("ref\x01", 1000);
+
+    assert_eq!(pri.len(), inv.len(), "every definition writes both pri and inv");
     assert_eq!(
-        stats.symbols_indexed % 2,
-        0,
-        "every declaration writes one primary + one inverted key, so the total must be even"
+        stats.symbols_indexed,
+        pri.len() + inv.len() + refs.len(),
+        "stats.symbols_indexed must equal the sum across all three namespaces"
     );
     assert_eq!(mem.symbol_count(), stats.symbols_indexed);
 }
@@ -109,7 +119,9 @@ fn prefix_scan_by_file_returns_only_that_file() {
     for s in &hits {
         assert_eq!(s.repo, REPO_ID);
         assert_eq!(s.path, "src/math.rs");
-        assert_eq!(s.kind, "function_item");
+        // Tags vocabulary: top-level fn → kind="function" (was "function_item"
+        // before the tags.scm refactor; see CLAUDE.md "Docs vs. Reality").
+        assert_eq!(s.kind, "function");
     }
 }
 
@@ -118,11 +130,12 @@ fn inverted_lookup_finds_function_by_name_across_files() {
     let mem = fresh_memory();
     ingest::ingest_repo(&mem, REPO_ID, &fixture_path());
 
-    let hits = mem.find_symbols("sym\x01function_item\x01add\x01", 100);
+    // Tags vocabulary: top-level fn → kind="function".
+    let hits = mem.find_symbols("sym\x01function\x01add\x01", 100);
     assert_eq!(hits.len(), 1, "exactly one fn named `add` in the fixture");
     let s = &hits[0];
     assert_eq!(s.name, "add");
-    assert_eq!(s.kind, "function_item");
+    assert_eq!(s.kind, "function");
     assert_eq!(s.path, "src/math.rs");
     assert_eq!(s.repo, REPO_ID);
 }
@@ -143,4 +156,91 @@ fn delete_repo_clears_all_entries() {
     assert!(still_there.is_empty());
     let inv_gone = mem.find_symbols("sym\x01", 10);
     assert!(inv_gone.is_empty());
+    let refs_gone = mem.find_symbols("ref\x01", 10);
+    assert!(refs_gone.is_empty(), "delete_repo_symbols must also clear ref\\x01 entries");
+}
+
+#[test]
+fn references_are_indexed_under_ref_namespace() {
+    use blazing_art_mcp::ingest::SymbolRole;
+
+    let mem = fresh_memory();
+    ingest::ingest_repo(&mem, REPO_ID, &fixture_path());
+
+    // The fixture has no function calls (no call_expression nodes), so the
+    // only reference upstream tree-sitter-rust tags.scm picks up is
+    // `impl Circle` → @reference.implementation capturing `Circle`.
+    let circle_refs = mem.find_symbols("ref\x01Circle\x01", 100);
+    assert!(
+        !circle_refs.is_empty(),
+        "expected at least one reference to `Circle` from the fixture's impl block"
+    );
+    for r in &circle_refs {
+        assert_eq!(r.role, SymbolRole::Reference, "ref\\x01... entries must have role=Reference");
+        assert_eq!(r.name, "Circle");
+        assert_eq!(r.repo, REPO_ID);
+        assert_eq!(r.kind, "implementation");
+    }
+
+    // Inverted-def lookup still works for the definition side.
+    let circle_def = mem.find_symbols("sym\x01class\x01Circle\x01", 10);
+    assert_eq!(circle_def.len(), 1);
+    assert_eq!(circle_def[0].role, SymbolRole::Definition);
+    assert_eq!(circle_def[0].kind, "class");
+}
+
+#[test]
+fn ingest_multilang_fixture() {
+    use blazing_art_mcp::ingest::SymbolRole;
+
+    const ML_REPO: &str = "multilang";
+    let mem = fresh_memory();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample-multilang");
+    let stats = ingest::ingest_repo(&mem, ML_REPO, &path);
+
+    assert!(stats.errors.is_empty(), "multilang fixture must parse cleanly: {:?}", stats.errors);
+    assert_eq!(stats.files_parsed, 5, "fixture has exactly 5 files (one per language)");
+
+    // Definitions: 3 Greeter.java + 3 box.cpp + 3 counter.js + 3 main.go + 4 point.c = 16
+    let defs = mem.find_symbols(&format!("pri\x01{ML_REPO}\x01"), 1000);
+    assert_eq!(defs.len(), 16, "expected exactly 16 definitions across the 5 fixture files");
+    for d in &defs {
+        assert_eq!(d.role, SymbolRole::Definition);
+    }
+
+    // References: at least one per file. Exact counts depend on grammar coverage,
+    // but each language should produce at least 3 refs from the fixture.
+    let refs = mem.find_symbols("ref\x01", 1000);
+    assert!(refs.len() >= 15, "expected at least 15 references; got {}", refs.len());
+    for r in &refs {
+        assert_eq!(r.role, SymbolRole::Reference);
+    }
+
+    // Per-language smoke: at least one canonical decl per language is findable
+    // via the inverted index.
+    let greeter = mem.find_symbols("sym\x01class\x01Greeter\x01", 10);
+    assert_eq!(greeter.len(), 1, "Java class Greeter must be indexed");
+
+    let counter = mem.find_symbols("sym\x01class\x01Counter\x01", 10);
+    assert_eq!(counter.len(), 1, "JS class Counter must be indexed");
+
+    let box_cls = mem.find_symbols("sym\x01class\x01Box\x01", 10);
+    assert_eq!(box_cls.len(), 1, "C++ class Box must be indexed");
+
+    // C struct Point — surfaced as kind=class in tags vocabulary.
+    let point = mem.find_symbols("sym\x01class\x01Point\x01", 10);
+    assert_eq!(point.len(), 1, "C struct Point must be indexed (as kind=class)");
+
+    // Go type Vec3 — surfaced as kind=type via @definition.type.
+    let vec3 = mem.find_symbols("sym\x01type\x01Vec3\x01", 10);
+    assert_eq!(vec3.len(), 1, "Go type Vec3 must be indexed (as kind=type)");
+
+    // Cross-language: there are TWO `main` functions in the fixture
+    // (Java method main, Go function main, C function main = three actually).
+    // findSymbols on sym\x01function\x01main\x01 picks up the C and Go ones;
+    // the Java one is kind=method.
+    let main_fns = mem.find_symbols("sym\x01function\x01main\x01", 10);
+    assert_eq!(main_fns.len(), 2, "C main + Go main = 2 function-kind 'main' decls");
+    let main_methods = mem.find_symbols("sym\x01method\x01main\x01", 10);
+    assert_eq!(main_methods.len(), 1, "Java main is method-kind");
 }

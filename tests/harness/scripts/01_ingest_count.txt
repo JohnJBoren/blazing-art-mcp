@@ -1,0 +1,1 @@
+Use the blazing-art MCP server to ingest the directory at "tests/fixtures/sample-repo" and tell me how many declarations were indexed.

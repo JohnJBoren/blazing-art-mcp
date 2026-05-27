@@ -40,6 +40,15 @@ criterion/
 *.json
 !examples/*.json
 !data/*.json
+# v0.2 eval framework: keep the config files, ignore the per-run outputs.
+!eval/repos.json
+!eval/threshold.json
+eval/results/
+# Goldsets: hand-curated set is checked in (.jsonl), auto-generated ones are not.
+eval/goldset/*.jsonl
+!eval/goldset/handcurated.jsonl
+# v0.2 harness transcripts: per-run outputs only, never committed.
+tests/harness/transcripts/
 
 # Docker
 .dockerignore

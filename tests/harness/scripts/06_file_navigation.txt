@@ -1,0 +1,1 @@
+After ingesting tests/fixtures/sample-repo via the blazing-art MCP server, use findSymbols with prefix pri\u0001sample-repo\u0001src/math.rs\u0001 to list every declaration in src/math.rs. Report the names of all functions found.

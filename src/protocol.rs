@@ -127,6 +127,20 @@ fn tools_list_payload() -> Value {
                 }
             },
             {
+                "name": "findReferences",
+                "description": "Find every call-site / use of a symbol by name across the index. Returns AstSymbol records emitted by @reference.* captures during ingest. Optionally filter by repo and/or kind ('call', 'class', 'implementation', 'type'). Internally a prefix scan over 'ref\\u0001<name>\\u0001' (plus '<repo>\\u0001' if repo is given), with optional kind filtering applied server-side.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Exact symbol name to find references to"},
+                        "repo": {"type": "string", "description": "Restrict to a single repo_id (optional)"},
+                        "kind": {"type": "string", "description": "Restrict to a reference kind: call, class, implementation, type (optional)"},
+                        "limit": {"type": "integer", "description": "Maximum number of results (default: 100)"}
+                    },
+                    "required": ["name"]
+                }
+            },
+            {
                 "name": "deleteRepo",
                 "description": "Remove every symbol entry (both primary and inverted) for the given repo_id. Useful before re-ingesting a repo to avoid stale entries.",
                 "inputSchema": {
@@ -135,6 +149,16 @@ fn tools_list_payload() -> Value {
                         "repo_id": {"type": "string", "description": "The repo_id used during ingestion"}
                     },
                     "required": ["repo_id"]
+                }
+            },
+            {
+                "name": "ingestStats",
+                "description": "(v0.2) Return total + per-kind symbol counts in the index. Optionally scope to a single repo. Returns {total, definitions, references, per_kind: {<kind>: <count>}}.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {"type": "string", "description": "Optional repo_id to scope counts to"}
+                    }
                 }
             }
         ]
@@ -254,6 +278,50 @@ fn handle_tool_call(memory: &Memory, params: &Value) -> Value {
             }
         }
 
+        "findReferences" => {
+            if let Some(name) = args["name"].as_str() {
+                let limit = args["limit"].as_u64().unwrap_or(100) as usize;
+                let repo_filter = args["repo"].as_str();
+                let kind_filter = args["kind"].as_str();
+                // Reject names that contain SOH up front; the schema can't represent them.
+                if name.as_bytes().contains(&0x01) {
+                    serde_json::json!({"error": "name contains SOH separator byte (\\x01)"})
+                } else {
+                    // The ref schema is `ref\x01<name>\x01<repo>\x01<path>:<line>`,
+                    // so the prefix tightens with repo if provided.
+                    let prefix = match repo_filter {
+                        Some(r) if !r.as_bytes().contains(&0x01) => {
+                            format!("ref\x01{name}\x01{r}\x01")
+                        }
+                        Some(_) => {
+                            return serde_json::json!({
+                                "content": [{"type": "text", "text": serde_json::json!({
+                                    "error": "repo filter contains SOH separator byte (\\x01)"
+                                }).to_string()}]
+                            });
+                        }
+                        None => format!("ref\x01{name}\x01"),
+                    };
+                    // Pull more than `limit` if a kind filter will trim — keep it simple
+                    // for v0.2 and over-fetch a bit when filtering. The hard cap is a
+                    // belt-and-braces against unbounded kind-filter scans.
+                    let raw_limit = if kind_filter.is_some() {
+                        limit.saturating_mul(4).min(10_000)
+                    } else {
+                        limit
+                    };
+                    let mut hits = memory.find_symbols(&prefix, raw_limit);
+                    if let Some(k) = kind_filter {
+                        hits.retain(|s| s.kind == k);
+                        hits.truncate(limit);
+                    }
+                    serde_json::to_value(hits).unwrap_or(Value::Null)
+                }
+            } else {
+                serde_json::json!({"error": "Missing name parameter"})
+            }
+        }
+
         "deleteRepo" => {
             if let Some(repo_id) = args["repo_id"].as_str() {
                 let removed = memory.delete_repo_symbols(repo_id);
@@ -261,6 +329,12 @@ fn handle_tool_call(memory: &Memory, params: &Value) -> Value {
             } else {
                 serde_json::json!({"error": "Missing repo_id parameter"})
             }
+        }
+
+        "ingestStats" => {
+            let repo_filter = args["repo"].as_str();
+            let stats = memory.ingest_stats(repo_filter);
+            serde_json::to_value(stats).unwrap_or(Value::Null)
         }
 
         _ => serde_json::json!({"error": format!("Unknown tool: {tool_name}")}),

@@ -1,0 +1,1 @@
+Use the blazing-art MCP server to ingest tests/fixtures/sample-multilang. Then use findSymbols with the inverted prefix sym\u0001class\u0001Greeter\u0001 to find the Java Greeter class. Report its path.

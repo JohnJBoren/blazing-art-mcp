@@ -96,6 +96,21 @@
     .ok { color: var(--ok); }
     .warn { color: var(--warn); }
     code { background: #0d1117; padding: 1px 4px; border-radius: 3px; }
+    /* v0.2 ingest-stats histogram */
+    .kind-bars { margin-top: 10px; display: grid; gap: 4px; }
+    .kind-row {
+      display: grid; grid-template-columns: 110px 1fr 60px;
+      align-items: center; gap: 8px; font-size: 12px;
+    }
+    .kind-row .kind-label { color: var(--muted); text-align: right; }
+    .kind-row .kind-bar {
+      height: 14px; background: var(--panel);
+      border: 1px solid var(--border); position: relative; overflow: hidden;
+    }
+    .kind-row .kind-bar > .fill {
+      height: 100%; background: var(--accent); opacity: 0.55;
+    }
+    .kind-row .kind-count { font-variant-numeric: tabular-nums; text-align: right; }
   </style>
 </head>
 <body>
@@ -140,8 +155,9 @@
     <button data-prefix="pri{SOH}{repo}{SOH}">All symbols in repo</button>
     <button data-prefix="pri{SOH}{repo}{SOH}memory.rs{SOH}">memory.rs only</button>
     <button data-prefix="pri{SOH}{repo}{SOH}ingest.rs{SOH}">ingest.rs only</button>
-    <button data-prefix="sym{SOH}function_item{SOH}new{SOH}">All <code>fn new</code> across repos</button>
-    <button data-prefix="sym{SOH}struct_item{SOH}Memory{SOH}">All <code>struct Memory</code></button>
+    <button data-prefix="sym{SOH}function{SOH}new{SOH}">All <code>fn new</code> across repos</button>
+    <button data-prefix="sym{SOH}class{SOH}Memory{SOH}">All <code>class Memory</code></button>
+    <button data-prefix="ref{SOH}Memory{SOH}">All references to <code>Memory</code></button>
   </div>
   <div class="hint" style="margin-top:8px;">
     The quick-prefixes use the locked schema:
@@ -160,6 +176,38 @@
   <div id="results" class="results">
     <div class="empty">Run ingest, then a prefix scan.</div>
   </div>
+</div>
+
+<div class="panel">
+  <h2>4. Find references <span class="badge">v0.2</span></h2>
+  <div class="row">
+    <input id="ref-name" type="text" placeholder="exact symbol name (e.g. Memory)">
+    <input id="ref-kind" type="text" placeholder="optional kind filter (call, class, path, ...)" style="max-width: 240px;">
+    <button id="ref-btn">Find references</button>
+  </div>
+  <div class="hint" style="margin-top:8px;">
+    Backed by a single ART prefix scan over the <code>ref{SOH}&lt;name&gt;{SOH}</code>
+    namespace. Each hit is a call-site or use of the named symbol, captured by the
+    language's <code>tags.scm</code> via <code>@reference.*</code>.
+  </div>
+  <div class="stats" style="grid-template-columns: 1fr 1fr;">
+    <div class="stat"><div class="stat-label">refs</div><div class="stat-value" id="stat-refs">—</div></div>
+    <div class="stat"><div class="stat-label">latency (ms)</div><div class="stat-value" id="stat-ref-latency">—</div></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>5. Ingest stats <span class="badge">v0.2</span></h2>
+  <div class="row">
+    <input id="stats-repo" type="text" placeholder="optional: scope to a single repo_id" style="max-width: 280px;">
+    <button id="stats-btn">Refresh stats</button>
+  </div>
+  <div class="stats" style="grid-template-columns: 1fr 1fr 1fr;">
+    <div class="stat"><div class="stat-label">total entries</div><div class="stat-value" id="stat-total">—</div></div>
+    <div class="stat"><div class="stat-label">definitions</div><div class="stat-value" id="stat-defs">—</div></div>
+    <div class="stat"><div class="stat-label">references</div><div class="stat-value" id="stat-refs-total">—</div></div>
+  </div>
+  <div id="kind-bars" class="kind-bars"></div>
 </div>
 
 <div class="panel">
@@ -293,6 +341,65 @@
   function escape(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
+
+  // ----- v0.2 Task 12: findReferences + ingestStats panels -----------------
+
+  async function findReferences() {
+    const name = $("ref-name").value.trim();
+    if (!name) return status("enter a symbol name", "warn");
+    const kind = $("ref-kind").value.trim() || undefined;
+    status("finding references...");
+    try {
+      const args = { name, ...(kind ? { kind } : {}), limit: 200 };
+      const { data, ms } = await callTool("findReferences", args);
+      $("stat-refs").textContent = Array.isArray(data) ? data.length : 0;
+      $("stat-ref-latency").textContent = ms.toFixed(1);
+      const box = $("results");
+      if (!Array.isArray(data) || data.length === 0) {
+        box.innerHTML = `<div class="empty">no references for <code>${escape(name)}</code>${kind ? " (kind=" + escape(kind) + ")" : ""}</div>`;
+      } else {
+        box.innerHTML = data.map((s) => `
+          <div class="sym-row">
+            <span class="sym-loc">${s.line}:${s.col}</span>
+            <span class="sym-kind">${escape(s.kind)}</span>
+            <span class="sym-name">${escape(s.name)}</span>
+            <span class="sym-path">${escape(s.repo)}/${escape(s.path)}</span>
+          </div>
+        `).join("");
+      }
+      status(`${data.length} references, ${ms.toFixed(1)} ms`, "ok");
+    } catch (e) {
+      status("findReferences failed: " + e.message, "warn");
+    }
+  }
+  $("ref-btn").onclick = findReferences;
+  $("ref-name").addEventListener("keydown", (e) => { if (e.key === "Enter") findReferences(); });
+
+  async function refreshStats() {
+    const repo = $("stats-repo").value.trim() || undefined;
+    try {
+      const args = repo ? { repo } : {};
+      const { data } = await callTool("ingestStats", args);
+      $("stat-total").textContent = data.total ?? "—";
+      $("stat-defs").textContent = data.definitions ?? "—";
+      $("stat-refs-total").textContent = data.references ?? "—";
+      // Render the per-kind histogram. data.per_kind is { <kind>: <count> }.
+      const entries = Object.entries(data.per_kind || {}).sort((a, b) => b[1] - a[1]);
+      const max = entries.reduce((m, [, c]) => Math.max(m, c), 1);
+      const html = entries.map(([k, c]) => `
+        <div class="kind-row">
+          <div class="kind-label">${escape(k)}</div>
+          <div class="kind-bar"><div class="fill" style="width:${((c / max) * 100).toFixed(1)}%"></div></div>
+          <div class="kind-count">${c}</div>
+        </div>
+      `).join("");
+      $("kind-bars").innerHTML = html || `<div class="empty">no symbols indexed yet</div>`;
+      status(`stats refreshed (${data.total} total entries${repo ? " in " + repo : ""})`, "ok");
+    } catch (e) {
+      status("ingestStats failed: " + e.message, "warn");
+    }
+  }
+  $("stats-btn").onclick = refreshStats;
 </script>
 
 </body>

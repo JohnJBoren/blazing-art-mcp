@@ -320,6 +320,85 @@ fn bench_real_data(_c: &mut Criterion) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// v0.2 Task 4: bench_parallel_ingest — times the rayon-parallelized ingest path.
+// We use Criterion so regressions show up as benchmark deltas, not as silent
+// wall-clock drift.
+// ---------------------------------------------------------------------------
+
+fn bench_parallel_ingest(c: &mut Criterion) {
+    use std::time::Duration;
+
+    let mut g = c.benchmark_group("parallel_ingest");
+    g.sample_size(10); // ingest is ~ms-level; default 100 samples is overkill
+    g.measurement_time(Duration::from_secs(8));
+
+    // Tier 1: this repo's own src/ — always runs.
+    let own_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    if own_src.exists() {
+        g.bench_function("own_src", |b| {
+            b.iter(|| {
+                let mem = Memory::new(1000);
+                let stats = ingest::ingest_repo(&mem, "self", black_box(&own_src));
+                black_box(stats.symbols_indexed)
+            });
+        });
+    }
+
+    // Tier 2: axum source from the cargo registry — usually present after a
+    // build. Doubles as a "real-world Rust crate" sanity check.
+    let axum_root = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".cargo/registry/src"))
+        .and_then(|d| {
+            std::fs::read_dir(&d).ok().and_then(|entries| {
+                entries.filter_map(|e| e.ok()).find_map(|e| {
+                    let p = e.path();
+                    let candidate = p.join("axum-0.8.9");
+                    candidate.exists().then_some(candidate)
+                })
+            })
+        });
+    if let Some(p) = axum_root {
+        g.bench_with_input(BenchmarkId::new("real_world", "axum-0.8.9"), &p, |b, path| {
+            b.iter(|| {
+                let mem = Memory::new(1000);
+                let stats = ingest::ingest_repo(&mem, "axum", black_box(path));
+                black_box(stats.symbols_indexed)
+            });
+        });
+    } else {
+        eprintln!("parallel_ingest: SKIP axum tier (run a `cargo build` first to populate the cargo cache)");
+    }
+
+    // Tier 3: env-gated big-codebase tiers, same as bench_real_data.
+    if let Ok(p) = std::env::var("CPYTHON_LIB_PATH") {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            g.bench_with_input(BenchmarkId::new("cpython_lib", "env"), &path, |b, path| {
+                b.iter(|| {
+                    let mem = Memory::new(1000);
+                    let stats = ingest::ingest_repo(&mem, "cpython", black_box(path));
+                    black_box(stats.symbols_indexed)
+                });
+            });
+        }
+    }
+    if let Ok(p) = std::env::var("TYPESCRIPT_SRC_PATH") {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            g.bench_with_input(BenchmarkId::new("typescript_src", "env"), &path, |b, path| {
+                b.iter(|| {
+                    let mem = Memory::new(1000);
+                    let stats = ingest::ingest_repo(&mem, "typescript", black_box(path));
+                    black_box(stats.symbols_indexed)
+                });
+            });
+        }
+    }
+
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_point_lookup,
@@ -327,5 +406,6 @@ criterion_group!(
     bench_insert_bulk,
     bench_scaling_sweep,
     bench_real_data,
+    bench_parallel_ingest,
 );
 criterion_main!(benches);

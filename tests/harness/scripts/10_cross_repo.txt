@@ -1,0 +1,1 @@
+Ingest both tests/fixtures/sample-repo (as repo_id "sample-repo") and tests/fixtures/sample-multilang (as repo_id "multilang") via the blazing-art MCP server. Then use findSymbols with prefix sym\u0001function\u0001main\u0001 to find every function named `main` across BOTH repos. Report the count and the file paths.

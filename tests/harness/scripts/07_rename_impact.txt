@@ -1,0 +1,1 @@
+I want to rename the `Circle` class in tests/fixtures/sample-repo. After ingesting that repo via the blazing-art MCP server, list all places I would need to update — the definition site and every reference site.

@@ -1,0 +1,1 @@
+After ingesting tests/fixtures/sample-repo via the blazing-art MCP server, use findReferences to find every place that references `Circle` in the codebase. Report the file paths.
