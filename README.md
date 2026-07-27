@@ -16,7 +16,7 @@ agents actually run — prefix scans over symbol-shaped keys.
 | JSON-RPC dispatch | `src/protocol.rs` |
 | Stdio MCP transport | `src/transport/stdio.rs` |
 | HTTP+SSE MCP transport (axum, spec 2025-06-18) | `src/transport/http.rs` |
-| Tree-sitter AST ingestion (Rust, Python, TypeScript, TSX, **Go, Java, C, C++, JavaScript** — v0.2) | `src/ingest.rs`, `queries/<lang>/tags.scm` |
+| Tree-sitter AST ingestion (Rust, Python, TypeScript, TSX, **Go, Java, C, C++, JavaScript** — v0.2; **Ruby** — v0.3) | `src/ingest.rs`, `queries/<lang>/tags.scm` |
 | Criterion benchmarks (point/prefix/insert + scaling sweep + real-data) | `benches/art_benchmarks.rs` |
 | Per-backend isolated RSS measurement (macOS-only) | `benches/memory_rss.rs` |
 | Shared synthetic key generator | `benches/shared/keygen.rs` |

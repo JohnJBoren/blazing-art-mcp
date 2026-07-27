@@ -160,6 +160,17 @@ fn tools_list_payload() -> Value {
                         "repo": {"type": "string", "description": "Optional repo_id to scope counts to"}
                     }
                 }
+            },
+            {
+                "name": "snapshot",
+                "description": "(v0.3) Write a snapshot of all entities, events, and AST symbols to <path> as a single bincode file (atomic via tmp + rename). The file is loadable on subsequent startup via the --snapshot-path CLI flag. Returns {bytes_written, entities, events, symbols}.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Absolute path to write the snapshot file"}
+                    },
+                    "required": ["path"]
+                }
             }
         ]
     })
@@ -335,6 +346,29 @@ fn handle_tool_call(memory: &Memory, params: &Value) -> Value {
             let repo_filter = args["repo"].as_str();
             let stats = memory.ingest_stats(repo_filter);
             serde_json::to_value(stats).unwrap_or(Value::Null)
+        }
+
+        "snapshot" => {
+            if let Some(path_str) = args["path"].as_str() {
+                let path = PathBuf::from(path_str);
+                match memory.snapshot(&path) {
+                    Ok(_) => {
+                        let stats = memory.ingest_stats(None);
+                        let meta = std::fs::metadata(&path).ok();
+                        serde_json::json!({
+                            "success": true,
+                            "path": path.display().to_string(),
+                            "bytes_written": meta.map(|m| m.len()).unwrap_or(0),
+                            "entities": memory.entity_count(),
+                            "events": memory.event_count(),
+                            "symbols": stats.total,
+                        })
+                    }
+                    Err(e) => serde_json::json!({"error": format!("snapshot failed: {e}")}),
+                }
+            } else {
+                serde_json::json!({"error": "Missing path parameter"})
+            }
         }
 
         _ => serde_json::json!({"error": format!("Unknown tool: {tool_name}")}),

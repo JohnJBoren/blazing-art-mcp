@@ -22,3 +22,23 @@
   type: (type_identifier) @name) @reference.class
 
 (superclass (type_identifier) @name) @reference.class
+
+; --- v0.3 Task 2: import + field-type reference captures ---
+
+; `import com.example.Foo;` — captures the trailing identifier.
+(import_declaration
+  (scoped_identifier
+    name: (identifier) @name)) @reference.class
+
+; `private SomeType field;` — captures the type as a class reference.
+(field_declaration
+  type: (type_identifier) @name) @reference.class
+
+; `void method(SomeType param)` — captures the parameter type.
+(formal_parameter
+  type: (type_identifier) @name) @reference.class
+
+; Generic argument: `List<Foo>` — captures Foo.
+(type_arguments
+  (type_identifier) @name) @reference.type
+

@@ -199,11 +199,11 @@ fn ingest_multilang_fixture() {
     let stats = ingest::ingest_repo(&mem, ML_REPO, &path);
 
     assert!(stats.errors.is_empty(), "multilang fixture must parse cleanly: {:?}", stats.errors);
-    assert_eq!(stats.files_parsed, 5, "fixture has exactly 5 files (one per language)");
+    assert_eq!(stats.files_parsed, 6, "fixture has exactly 6 files (one per supported language)");
 
-    // Definitions: 3 Greeter.java + 3 box.cpp + 3 counter.js + 3 main.go + 4 point.c = 16
+    // Definitions: 3 Greeter.java + 3 box.cpp + 3 counter.js + 3 main.go + 4 point.c + 4 square.rb = 20
     let defs = mem.find_symbols(&format!("pri\x01{ML_REPO}\x01"), 1000);
-    assert_eq!(defs.len(), 16, "expected exactly 16 definitions across the 5 fixture files");
+    assert_eq!(defs.len(), 20, "expected exactly 20 definitions across the 6 fixture files");
     for d in &defs {
         assert_eq!(d.role, SymbolRole::Definition);
     }
@@ -243,4 +243,10 @@ fn ingest_multilang_fixture() {
     assert_eq!(main_fns.len(), 2, "C main + Go main = 2 function-kind 'main' decls");
     let main_methods = mem.find_symbols("sym\x01method\x01main\x01", 10);
     assert_eq!(main_methods.len(), 1, "Java main is method-kind");
+
+    // Ruby smoke (v0.3 Task 3): class Square + method area must be indexed.
+    let square = mem.find_symbols("sym\x01class\x01Square\x01", 10);
+    assert_eq!(square.len(), 1, "Ruby class Square must be indexed");
+    let area_methods = mem.find_symbols("sym\x01method\x01area\x01", 10);
+    assert!(!area_methods.is_empty(), "Ruby method `area` must be indexed");
 }

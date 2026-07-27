@@ -90,6 +90,7 @@ enum Lang {
     C,
     Cpp,
     Js,
+    Ruby,
 }
 
 impl Lang {
@@ -106,6 +107,7 @@ impl Lang {
             // tree-sitter-javascript handles JSX, so .jsx is mapped here. If a
             // future workload needs TSX-style JSX semantics, change to Tsx.
             "js" | "mjs" | "cjs" | "jsx" => Some(Lang::Js),
+            "rb" | "rake" => Some(Lang::Ruby),
             _ => None,
         }
     }
@@ -121,6 +123,7 @@ impl Lang {
             Lang::C => tree_sitter_c::LANGUAGE.into(),
             Lang::Cpp => tree_sitter_cpp::LANGUAGE.into(),
             Lang::Js => tree_sitter_javascript::LANGUAGE.into(),
+            Lang::Ruby => tree_sitter_ruby::LANGUAGE.into(),
         }
     }
 
@@ -135,6 +138,7 @@ impl Lang {
             Lang::C => include_str!("../queries/c/tags.scm"),
             Lang::Cpp => include_str!("../queries/cpp/tags.scm"),
             Lang::Js => include_str!("../queries/javascript/tags.scm"),
+            Lang::Ruby => include_str!("../queries/ruby/tags.scm"),
         }
     }
 }
@@ -346,6 +350,35 @@ fn ingest_file(path: &Path, repo: &str, repo_root: &Path) -> Result<Vec<(String,
     Ok(out)
 }
 
+/// v0.3 Task 6: per-file re-ingest. Used by the file-watcher path:
+///   1. Compute the rel path under `repo_root`.
+///   2. Delete every existing entry for `(repo_id, rel_path)`.
+///   3. Re-parse the file; bulk-insert the new entries.
+/// Returns `(removed, inserted)` for caller logging.
+pub fn reingest_file(
+    memory: &Memory,
+    repo_id: &str,
+    repo_root: &Path,
+    file_path: &Path,
+) -> Result<(usize, usize)> {
+    let rel = file_path
+        .strip_prefix(repo_root)
+        .unwrap_or(file_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let removed = memory.delete_file_symbols(repo_id, &rel);
+
+    // If the file no longer exists (deleted), we're done — entries are gone.
+    if !file_path.exists() {
+        return Ok((removed, 0));
+    }
+
+    let pairs = ingest_file(file_path, repo_id, repo_root)?;
+    let inserted = memory.add_symbols_bulk(pairs);
+    Ok((removed, inserted))
+}
+
 /// Public entry: walk `repo_path` recursively, parse every supported file in
 /// parallel via rayon, and insert the resulting symbols into `memory` under a
 /// single bulk-write lock.
@@ -511,5 +544,6 @@ mod tests {
         let _ = query_for(Lang::C);
         let _ = query_for(Lang::Cpp);
         let _ = query_for(Lang::Js);
+        let _ = query_for(Lang::Ruby);
     }
 }

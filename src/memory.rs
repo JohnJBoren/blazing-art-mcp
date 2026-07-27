@@ -33,7 +33,11 @@ pub struct IngestStats {
 pub struct Entity {
     pub name: String,
     pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional birth year. v0.3 Task 5: dropped `skip_serializing_if` because
+    /// bincode (a fixed binary format) can't represent skipped fields.
+    /// JSON consumers see `"born": null` for entities without a year, which
+    /// `#[serde(default)]` tolerates on the read path.
+    #[serde(default)]
     pub born: Option<String>,
     pub tags: Vec<String>,
 }
@@ -183,6 +187,29 @@ impl Memory {
         removed
     }
 
+    /// v0.3 Task 6: delete every symbol entry whose `(repo, path)` matches the
+    /// given file. Used by the file-watcher path to invalidate one file's
+    /// entries before re-parsing it.
+    pub fn delete_file_symbols(&self, repo_id: &str, rel_path: &str) -> usize {
+        let mut to_remove: Vec<CString> = Vec::new();
+        {
+            let guard = self.symbols.read();
+            for (k, v) in guard.iter() {
+                if v.repo == repo_id && v.path == rel_path {
+                    to_remove.push(k.clone());
+                }
+            }
+        }
+        let mut guard = self.symbols.write();
+        let mut removed = 0;
+        for k in to_remove {
+            if guard.remove(&k).is_some() {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     /// One-shot stats over the symbol index, scoped optionally to a single repo.
     /// Returns total entry count + per-kind histogram, computed under a single
     /// read lock so the count is internally consistent. v0.2 Task 12.
@@ -273,6 +300,120 @@ impl Memory {
         );
         Ok(())
     }
+
+    /// v0.3 Task 5: snapshot the entire `Memory` (entities + events + symbols)
+    /// to a single bincode file. Schema:
+    ///
+    /// ```text
+    /// "BARTS001"  (8 byte magic)
+    /// bincode-serialized SnapshotV1 { entities, events, symbols }
+    /// ```
+    ///
+    /// Each map is serialized as `Vec<(Vec<u8>, T)>` since `blart::TreeMap`
+    /// doesn't implement `Serialize` directly. Reload via `load_snapshot`.
+    /// Atomic on disk: writes to `<path>.tmp` then renames.
+    pub fn snapshot(&self, path: &PathBuf) -> Result<()> {
+        let snap = SnapshotV1 {
+            entities: self
+                .entities
+                .read()
+                .iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v.clone()))
+                .collect(),
+            events: self
+                .events
+                .read()
+                .iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v.clone()))
+                .collect(),
+            symbols: self
+                .symbols
+                .read()
+                .iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v.clone()))
+                .collect(),
+        };
+
+        let payload = bincode::serialize(&snap)?;
+        let mut buf = Vec::with_capacity(SNAPSHOT_MAGIC.len() + payload.len());
+        buf.extend_from_slice(SNAPSHOT_MAGIC);
+        buf.extend_from_slice(&payload);
+
+        let tmp = path.with_extension(format!(
+            "{}.tmp",
+            path.extension().and_then(|e| e.to_str()).unwrap_or("snap")
+        ));
+        fs::write(&tmp, &buf)?;
+        fs::rename(&tmp, path)?;
+        eprintln!(
+            "[snapshot] wrote {} bytes ({} entities, {} events, {} symbols) to {}",
+            buf.len(),
+            snap.entities.len(),
+            snap.events.len(),
+            snap.symbols.len(),
+            path.display()
+        );
+        Ok(())
+    }
+
+    /// Inverse of `snapshot`. Replaces the current contents (if any).
+    pub fn load_snapshot(&self, path: &PathBuf) -> Result<()> {
+        let bytes = fs::read(path)
+            .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
+        if bytes.len() < SNAPSHOT_MAGIC.len() || !bytes.starts_with(SNAPSHOT_MAGIC) {
+            anyhow::bail!(
+                "{} is not a blazing-art snapshot (missing magic {:?})",
+                path.display(),
+                std::str::from_utf8(SNAPSHOT_MAGIC).unwrap_or("?")
+            );
+        }
+        let payload = &bytes[SNAPSHOT_MAGIC.len()..];
+        let snap: SnapshotV1 = bincode::deserialize(payload)
+            .map_err(|e| anyhow::anyhow!("bincode::deserialize SnapshotV1 from {}: {e}", path.display()))?;
+
+        let mut entities = self.entities.write();
+        let mut events = self.events.write();
+        let mut symbols = self.symbols.write();
+
+        // Replace, don't merge — semantics match a fresh restart.
+        *entities = TreeMap::new();
+        *events = TreeMap::new();
+        *symbols = TreeMap::new();
+
+        let (mut e_loaded, mut ev_loaded, mut s_loaded) = (0usize, 0usize, 0usize);
+        for (k, v) in snap.entities {
+            if let Ok(c) = CString::new(k) {
+                entities.insert(c, v);
+                e_loaded += 1;
+            }
+        }
+        for (k, v) in snap.events {
+            if let Ok(c) = CString::new(k) {
+                events.insert(c, v);
+                ev_loaded += 1;
+            }
+        }
+        for (k, v) in snap.symbols {
+            if let Ok(c) = CString::new(k) {
+                symbols.insert(c, v);
+                s_loaded += 1;
+            }
+        }
+        eprintln!(
+            "[snapshot] loaded {e_loaded} entities, {ev_loaded} events, {s_loaded} symbols from {}",
+            path.display()
+        );
+        Ok(())
+    }
+}
+
+const SNAPSHOT_MAGIC: &[u8; 8] = b"BARTS001";
+
+#[derive(Serialize, Deserialize)]
+struct SnapshotV1 {
+    entities: Vec<(Vec<u8>, Entity)>,
+    events: Vec<(Vec<u8>, Event)>,
+    symbols: Vec<(Vec<u8>, AstSymbol)>,
 }
 
 #[cfg(test)]

@@ -71,6 +71,7 @@ struct Args {
     repo_id: Option<String>,
     max_records: usize,
     lookback_commits: usize,
+    emit_per_commit: usize,
     verbose: bool,
 }
 
@@ -78,6 +79,7 @@ fn parse_args() -> Result<Args> {
     let mut a = Args {
         max_records: 200,
         lookback_commits: 5_000,
+        emit_per_commit: 1,
         ..Args::default()
     };
     let argv: Vec<String> = std::env::args().collect();
@@ -89,6 +91,7 @@ fn parse_args() -> Result<Args> {
             "--repo-id" => { a.repo_id = Some(argv[i + 1].clone()); i += 2; }
             "--max-records" => { a.max_records = argv[i + 1].parse()?; i += 2; }
             "--lookback-commits" => { a.lookback_commits = argv[i + 1].parse()?; i += 2; }
+            "--emit-per-commit" => { a.emit_per_commit = argv[i + 1].parse()?; i += 2; }
             "--verbose" | "-v" => { a.verbose = true; i += 1; }
             "--help" | "-h" => {
                 eprintln!("{USAGE}");
@@ -107,6 +110,9 @@ const USAGE: &str = r#"build_goldset --repo <path> --out <jsonl> [options]
   --repo-id <id>            Identifier for keys; default = basename of --repo
   --max-records <n>         Cap output size (default: 200)
   --lookback-commits <n>    Recent commits to consider (default: 5000)
+  --emit-per-commit <n>     Max records per commit (default: 1; emit top-N
+                            by token specificity if subject mentions multiple
+                            uniquely-matching identifiers)
   --verbose, -v             Print rejected subjects + match traces
 "#;
 
@@ -191,43 +197,83 @@ fn main() -> Result<()> {
             continue;
         }
 
-        // Try each identifier-like token in the subject; emit at most one
-        // record per commit (the first token that resolves uniquely).
-        let mut matched_any = false;
+        // Smarter algorithm (v0.3 Task 4): for each candidate token, count
+        // matches across ALL declaration kinds. Only emit when EXACTLY one
+        // matching symbol exists across the whole index — catches the case
+        // where a token matches a function in one place AND a class somewhere
+        // else (the old algorithm picked the function silently). Then score
+        // surviving candidates by token length and emit the most specific
+        // one (or up to args.emit_per_commit, when configured).
+        struct Candidate {
+            #[allow(dead_code)]
+            token: String,
+            hit: blazing_art_mcp::ingest::AstSymbol,
+            score: f64,
+        }
+        let mut candidates: Vec<Candidate> = Vec::new();
+
         for cap in ident_re.captures_iter(subject) {
             let tok = cap.get(1).unwrap().as_str();
             if tok.len() < 4 || stop.contains(tok.to_ascii_lowercase().as_str()) {
                 continue;
             }
-            // Ensure tok contains the SOH-rejecting characters only.
             if tok.as_bytes().contains(&0x01) {
                 continue;
             }
 
+            // Count matches across ALL kinds for this token.
+            let mut all_matches: Vec<(&'static str, blazing_art_mcp::ingest::AstSymbol)> =
+                Vec::new();
             for kind in DECL_KINDS {
                 let prefix = format!("sym\x01{kind}\x01{tok}\x01");
                 let hits = mem.find_symbols(&prefix, 5);
-                if hits.len() == 1 {
-                    let h = &hits[0];
-                    records.push(GoldRecord {
-                        query: subject.to_string(),
-                        repo: h.repo.clone(),
-                        path: h.path.clone(),
-                        kind: h.kind.clone(),
-                        name: h.name.clone(),
-                        role: "definition",
-                        source_commit: sha.to_string(),
-                    });
-                    matched_any = true;
+                for h in hits {
+                    all_matches.push((kind, h));
+                }
+                // Early exit: if we already have >1 hit, this token is
+                // ambiguous and we won't emit it.
+                if all_matches.len() > 1 {
                     break;
                 }
             }
-            if matched_any {
+            if all_matches.len() != 1 {
+                continue;
+            }
+            let (_kind, hit) = all_matches.into_iter().next().unwrap();
+
+            // Score: longer tokens are more specific. Multiplier helps
+            // ties go to longer tokens but doesn't dominate over future
+            // refinements (e.g., rarity score).
+            let score = tok.len() as f64;
+            candidates.push(Candidate {
+                token: tok.to_string(),
+                hit,
+                score,
+            });
+        }
+
+        if candidates.is_empty() {
+            rejected_no_match += 1;
+            continue;
+        }
+
+        // Sort by score descending (most specific first).
+        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+        let take = args.emit_per_commit.max(1);
+        for cand in candidates.into_iter().take(take) {
+            records.push(GoldRecord {
+                query: subject.to_string(),
+                repo: cand.hit.repo.clone(),
+                path: cand.hit.path.clone(),
+                kind: cand.hit.kind.clone(),
+                name: cand.hit.name.clone(),
+                role: "definition",
+                source_commit: sha.to_string(),
+            });
+            if records.len() >= args.max_records {
                 break;
             }
-        }
-        if !matched_any {
-            rejected_no_match += 1;
         }
     }
 

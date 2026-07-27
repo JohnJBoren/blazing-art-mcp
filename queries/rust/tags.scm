@@ -86,3 +86,24 @@
 
 (scoped_identifier
     path: (identifier) @name) @reference.path
+
+; --- v0.3 Task 2: `use` statement reference captures ---
+
+; `use foo::Bar` — captures Bar.
+(use_declaration
+    argument: (scoped_identifier
+        name: (identifier) @name)) @reference.class
+
+; `use foo::Bar as Baz` — captures Bar.
+(use_as_clause
+    path: (scoped_identifier
+        name: (identifier) @name)) @reference.class
+
+; `use foo::{Bar, Baz}` — captures each list member.
+(use_list
+    (identifier) @name) @reference.class
+
+(use_list
+    (scoped_identifier
+        name: (identifier) @name)) @reference.class
+

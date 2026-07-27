@@ -61,3 +61,13 @@
 (call_expression
   function: (member_expression
     property: (property_identifier) @name)) @reference.call
+
+; --- v0.3 Task 2: import-style reference captures ---
+
+; `import { Foo } from "x"` — Foo is a reference.
+(import_specifier
+  name: (identifier) @name) @reference.class
+
+; Generic type arguments: `Foo<Bar>` — Bar is a type reference.
+(type_arguments
+  (type_identifier) @name) @reference.type

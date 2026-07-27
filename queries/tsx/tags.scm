@@ -55,3 +55,11 @@
 (call_expression
   function: (member_expression
     property: (property_identifier) @name)) @reference.call
+
+; --- v0.3 Task 2: import-style reference captures (mirror of typescript/tags.scm) ---
+
+(import_specifier
+  name: (identifier) @name) @reference.class
+
+(type_arguments
+  (type_identifier) @name) @reference.type
